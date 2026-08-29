@@ -33,7 +33,7 @@ The EgressRoute table uses proxy_id as a UNIQUE foreign key to the existing Prox
 
 ### Account persistence and API
 
-- backend/ent/schema/account.go — add nullable egress_route_id and denormalized egress_country; add route edge only if repository queries require it.
+- backend/ent/schema/account.go — add nullable egress_route_id and required_egress_country; add route edge only if repository queries require it.
 - backend/internal/service/account.go — expose the two fields in the domain model.
 - backend/internal/service/account_service.go — extend generic create/update DTOs.
 - backend/internal/service/admin_service.go — extend admin input/output types.
@@ -65,6 +65,12 @@ Generated backend/cmd/server/wire_gen.go and Ent generated files may change only
 - backend/internal/service/openai_oauth_service.go
 - backend/internal/service/grok_oauth_service.go
 - backend/internal/service/gemini_oauth_service.go
+- backend/internal/pkg/antigravity/client.go
+- backend/internal/service/antigravity_oauth_service.go
+- backend/internal/service/antigravity_quota_fetcher.go
+- backend/internal/service/vertex_service_account.go
+- backend/internal/service/batch_image_provider_gemini.go
+- backend/internal/service/batch_image_provider_vertex.go
 - backend/internal/service/admin_proxy.go
 - backend/internal/repository/proxy_repo.go
 - backend/internal/config/config.go
@@ -104,13 +110,13 @@ The exact edit subset must be kept minimal during implementation: first centrali
 
 1. Add the model, repository, validation, and admin CRUD without changing request routing.
 2. Add a fail-closed EgressResolver keyed by account ID.
-3. Add runtime RouteHealth with startup preflight, 60-second periodic probes, a 120-second health TTL, immediate UNHEALTHY on probe failure/mismatch, and recovery only after a complete matching probe. Use ProxyExitInfoProber and require exact expected exit IPv4 and country.
+3. Add company-owned runtime RouteHealth with startup preflight, 60-second periodic probes, a 120-second health TTL, immediate UNHEALTHY on probe failure/mismatch, and recovery only after a complete matching probe. Do not use the current ProxyExitInfoProber as the security authority: its defaults are plain HTTP, it accepts administrator-selected targets, it stops at the first success, and the ipify parser has no country. Use exactly two independently operated, compile-time allowlisted HTTPS evidence endpoints; require both to agree on one public IPv4 and require the country-bearing result to match route policy. Exact endpoint operators remain an approval blocker.
 4. Decorate HTTPUpstream.Do and DoWithTLS. Resolve route.proxy_id, require account.proxy_id equality, validate active/non-deleted Proxy state and RouteHealth READY, then derive the effective URL. Missing, stale, unhealthy, inconsistent, or invalid routes return an error.
 5. Bind Claude/OpenAI/Grok/Gemini OAuth authorization sessions to egress_route_id plus final proxy_id, and reject callback overrides or drift. Use the same route for exchange and refresh.
-6. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, and WebSocket handshakes through route-aware factories. Claude usage without a TLS Profile still uses CompanyHTTPUpstream.
+6. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, batch Gemini/Vertex operations, Vertex service-account token exchange, and WebSocket handshakes through route-aware factories. Claude usage without a TLS Profile still uses CompanyHTTPUpstream.
 7. Disable Grok password authentication in V1. Reject custom_base_url for managed accounts. In company production, allow_direct_on_error=true fails startup.
 8. Validate OpenAI/Grok WebSocket final ProxyID against EgressRoute.ProxyID. The dialer must use proxyurl.Parse plus the approved proxy transport/dialer; direct url.Parse(proxyURL) is prohibited.
-9. Add the full fail-closed test set, including inactive/soft-deleted Proxy, duplicate route proxy_id, raw WebSocket parser bypass, exit IP/country mismatch, expired RouteHealth, and production direct-fallback startup failure.
+9. Add the full fail-closed test set, including inactive/soft-deleted Proxy, duplicate route proxy_id, duplicate canonical route endpoint, raw WebSocket parser bypass, exit IP/country mismatch, expired/fingerprint-mismatched RouteHealth, batch-provider direct clients, and production direct-fallback startup failure.
 10. Activate in strict order: application tests, staging, sing-box routes, DNS containment, IPv6 deny, nftables UID kill-switch, destructive leak tests, then managed production traffic.
 
 ## Required final security tests
@@ -123,6 +129,9 @@ The exact edit subset must be kept minimal during implementation: first centrali
 - ExitCountryMismatch -> RouteHealth UNHEALTHY and FAIL CLOSED
 - RouteHealthExpired -> FAIL CLOSED
 - DirectFallbackConfigTrue -> company production startup failure
+- DuplicateRouteEndpoint -> DB/service reject two managed Proxy rows that normalize to the same protocol/host/port
+- AntigravityRouteClassUnknown -> managed activation reject until policy explicitly assigns a route class
+- BatchProviderNoRoute -> Gemini/Vertex batch client creation fails closed instead of using an empty-proxy client or http.DefaultClient
 
 ## Compatibility and rollback
 
@@ -144,7 +153,22 @@ This document does not claim that:
 - socks5h alone prevents every local lookup.
 - sing-box Guard, nftables, IPv6 deny, or database migrations are deployed.
 - the expected exit IP has been verified.
+- the exact two independent HTTPS health-evidence endpoints have been selected or approved.
+- Antigravity has an approved V1 route-class assignment.
 - runtime RouteHealth exists or is READY.
 - route.enabled or dns_addr exists in V1.
 
 Those properties require Phase 1 code, tests, and the separately controlled host enforcement layers.
+
+## Final evidence gate
+
+This planned surface is subordinate to `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Phase 1 must not begin from an assumption that the design is frozen. Before implementation approval, resolve:
+
+- Antigravity and other unlisted account-type route classes;
+- the exact two independent HTTPS RouteHealth evidence operators;
+- the approved fixed public IPv4 for CN-DIRECT, US-A and SG-A;
+- duplicate canonical managed Proxy endpoint prevention;
+- route-aware Gemini/Vertex batch and Vertex service-account token clients;
+- the separately reviewed host UID/DNS/IPv6 kill-switch plan.
+
+Current gate: `DO NOT FREEZE`.

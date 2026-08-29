@@ -454,8 +454,9 @@ V1 health rules:
 - production startup/activation: if any referenced managed route is not READY, managed service activation fails closed
 - periodic probe interval: 60 seconds
 - health TTL: 120 seconds from the last successful verified probe
-- probe timeout: use the existing ProxyExitInfoProber timeout policy
-- probe transport: derive the URL from the validated route Proxy and use the existing ProxyExitInfoProber capability
+- probe timeout: a company-owned bounded deadline; do not inherit administrator-configurable diagnostic probe behavior
+- probe transport: derive the URL from the validated route Proxy and use the approved company parser/dialer; the current ProxyExitInfoProber is not a security authority because its defaults are HTTP, it accepts configured replacements, it returns the first success, and ipify supplies no country
+- probe evidence: exactly two independently operated, compile-time allowlisted HTTPS endpoints must agree on one public IPv4; the country-bearing response must match route.country_code; exact operators require explicit approval before freeze
 - probe failure: immediately mark UNHEALTHY; do not retain READY until TTL
 - stale/expired health: treat as UNHEALTHY and fail closed
 - exit IP: canonical IPv4 returned by the probe must exactly equal expected_exit_ipv4
@@ -1144,3 +1145,21 @@ Upstream compatibility is the second priority.
 Do not silently weaken TLS verification.
 
 Do not introduce any direct fallback.
+
+---
+
+# 26. Final Evidence Audit Gate
+
+The authoritative Phase 0.5 evidence record is `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Where an earlier planning statement conflicts with that evidence record, the evidence record controls until an explicit reviewed design decision updates this specification.
+
+Additional freeze requirements discovered at the fixed baseline:
+
+- Antigravity exists and performs account-sensitive outbound. Managed Antigravity is rejected until its V1 route class is explicitly approved.
+- Gemini/Vertex batch providers and Vertex service-account token exchange are independent client paths and must receive EgressDecision; HTTPUpstream decoration cannot cover them.
+- UNIQUE route `proxy_id` is not enough: two Proxy rows can name one canonical internal endpoint. Managed `(protocol, canonical_host, port)` duplication must be rejected to prevent route/port cross-wiring.
+- RouteHealth must use exactly two independently operated, compile-time allowlisted HTTPS evidence services. The existing ProxyExitInfoProber remains an administrator diagnostic only.
+- CN-DIRECT, US-A and SG-A cannot become READY until their real fixed public IPv4 values are approved and verified.
+
+The exact health-evidence endpoint operators, Antigravity route mapping and real exit IPv4 values are unresolved. The current design therefore remains:
+
+`FINAL DESIGN VERDICT: DO NOT FREEZE`

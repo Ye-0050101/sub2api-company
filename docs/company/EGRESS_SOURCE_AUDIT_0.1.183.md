@@ -27,7 +27,7 @@ V1 design decision: EgressRoute references the existing Proxy table by proxy_id 
 - HTTPUpstream already centralizes transport creation for a large fraction of account traffic and exposes accountID on both methods; it can be decorated without changing its public interface.
 - Existing admin service/handler/router/wire patterns support route CRUD and account selection UI.
 - proxyurl.Parse already accepts http, https, socks5, and socks5h, and normalizes socks5 to socks5h.
-- Custom provider base URLs generally remain compatible with transport-level route enforcement when the request still passes a real account ID through HTTPUpstream.
+- Ordinary provider URL selection remains compatible with transport-level route enforcement only where the request keeps the real account ID and does not enter the Anthropic custom-relay mode. That mode deliberately clears the local proxy and embeds the legacy proxy URL into a relay query parameter, so it is direct-capable from Sub2API to the relay and is incompatible with managed V1.
 
 ### Paths or interfaces that differ from the specification
 
@@ -44,7 +44,7 @@ V1 design decision: EgressRoute references the existing Proxy table by proxy_id 
 - Managed custom base URL is stored in Account.Extra and consumed through Account.IsCustomBaseURLEnabled/GetCustomBaseURL by gateway_forward.go, gateway_upstream_request.go, and gateway_count_tokens.go. Managed-account create/update validation must reject both the enable flag and URL.
 - service.Proxy.URL() constructs a URL without checking Status; service.Proxy.IsActive() is separate. Route resolution must explicitly require status=active.
 - Proxy uses SoftDeleteMixin, whose query interceptor normally enforces deleted_at IS NULL. Route validation must preserve this invariant explicitly and fail if a deleted Proxy is visible through any alternate query path or stale cache.
-- repository.NewProxyExitInfoProber already exposes ProxyExitInfoProber.ProbeProxy and returns exit IP, CountryCode and latency. It is reusable for route preflight/health, but a probe result without both IP and country cannot establish READY.
+- repository.NewProxyExitInfoProber is not suitable as the RouteHealth security authority. Its built-ins are plain HTTP ip-api/ipify targets, configured targets can replace them, ProbeProxy returns the first success, and the ipify parser has no country. A company-owned dual-independent-HTTPS verifier is required; exact endpoint operators remain unapproved evidence.
 - service/openai_ws_client.go currently calls url.Parse(normalizedProxy) and installs http.ProxyURL directly. This bypasses the project's proxyurl.Parse fail-fast parsing and socks5-to-socks5h normalization.
 
 ## A. Current real network call graph
@@ -150,6 +150,8 @@ Direct-capable means the production path can construct or fall back to a client/
 - backend/internal/service/account_test_service.go — Grok realtime test is outside HTTPUpstream.
 - backend/internal/service/batch_image_provider_gemini.go
 - backend/internal/service/batch_image_provider_vertex.go
+
+Both batch providers construct independent clients. Gemini/Vertex batch defaults use batchImageDefaultHTTPClient with an empty proxy, and the error fallback is http.DefaultClient. Vertex batch prediction and GCS object-store clients share that default. They are account-sensitive and outside HTTPUpstream.
 
 ### Non-account application and infrastructure clients
 
@@ -295,7 +297,7 @@ Minimum route fields:
 Minimum Account additions:
 
 - egress_route_id: nullable during migration, mandatory under company enforcement for supported account platforms.
-- egress_country: denormalized snapshot for UI/audit only; the route row remains authoritative.
+- required_egress_country: required account policy value; it must equal the resolved route country for managed traffic.
 - existing proxy_id: mandatory for managed accounts and exactly equal to EgressRoute.proxy_id.
 
 Constraints:
@@ -340,7 +342,8 @@ Caching route resolution is acceptable only with bounded TTL or versioned invali
 - OpenAI/Grok WebSocket and realtime handshakes, pools, reconnects, and realtime account tests.
 - The existing WebSocket proxy client directly uses url.Parse and http.ProxyURL; the company dial path must instead use proxyurl.Parse and the approved proxy transport/dialer.
 - Grok password login and captcha create/poll; the latter uses http.DefaultClient.
-- Antigravity and Vertex helper clients where they construct their own transport.
+- Antigravity and Vertex helper clients where they construct their own transport. Antigravity exists at this baseline, but the proposed V1 platform-to-route table does not assign it a route class; managed Antigravity therefore remains UNKNOWN and must be rejected until policy is approved.
+- Gemini and Vertex batch image providers, including Vertex GCS operations, because their default clients are created with an empty proxy and can fall back to http.DefaultClient.
 - Non-account login OAuth, payments, SMTP, release/pricing/Turnstile, web search, channel monitoring, moderation/security, and image fetch/storage traffic.
 - Explicit resolver/SSRF validation calls.
 - Any future call site that supplies accountID zero or constructs its own client.
@@ -351,14 +354,14 @@ These paths require route-aware factories/dialers or host-level blocking. The wr
 
 1. Schema and migration: add EgressRoute with UNIQUE proxy_id FK and UNIQUE route_key plus nullable Account route fields; retain Account.proxy_id and enforce equality for managed accounts. Do not add proxy_url, enabled, or dns_addr.
 2. Route CRUD and validation: repository, service, admin handler/routes, minimal UI selector, protected Proxy update/delete, and route core-field immutability while referenced.
-3. Route health: use ProxyExitInfoProber for startup and 60-second periodic probes; require exact expected IPv4/country; expire health after 120 seconds; represent only READY/UNHEALTHY.
+3. Route health: introduce a company-owned verifier using exactly two independently operated, compile-time allowlisted HTTPS endpoints; require endpoint agreement, exact expected public IPv4 and country; expire health after 120 seconds; represent only READY/UNHEALTHY. The current ProxyExitInfoProber remains an administrative diagnostic, not security evidence.
 4. Resolver: resolve by account ID, enforce platform class, ProxyID equality, active/not-deleted Proxy shape, no custom_base_url, and READY non-expired health.
 5. HTTP decorator: wrap Do and DoWithTLS and change the Wire provider. Leave the raw HTTPUpstream implementation unchanged.
 6. OAuth closure: bind Claude/OpenAI/Grok/Gemini authorization, exchange and refresh to the same route and ProxyID; remove callback route override. Disable Grok password auth.
 7. Usage/test closure: force Claude usage through CompanyHTTPUpstream even without a TLS Profile; route OpenAI quota/Codex probes, Gemini helpers, and account realtime tests through route-aware clients.
 8. WebSocket closure: validate final ProxyID and use proxyurl.Parse plus the approved proxy transport/dialer for OpenAI/Grok realtime, reconnect, pool, and tests.
 9. Startup/fallback closure: company production fails startup if allow_direct_on_error=true or enforcement is disabled; AnyTLS/HY2 failover remains inside sing-box.
-10. Verification: add ProxyInactive, ProxySoftDeleted, DuplicateRouteProxyID, WebSocketRawProxyParserBypass, ExitIPv4Mismatch, ExitCountryMismatch, RouteHealthExpired, DirectFallbackConfigTrue, route-drift and no-direct tests.
+10. Verification: add ProxyInactive, ProxySoftDeleted, DuplicateRouteProxyID, DuplicateRouteEndpoint, WebSocketRawProxyParserBypass, ExitIPv4Mismatch, ExitCountryMismatch, RouteHealthExpired, RouteHealthFingerprintMismatch, BatchProviderNoRoute, DirectFallbackConfigTrue, route-drift and no-direct tests.
 11. Operational gate: application/tests -> staging -> sing-box routes -> DNS containment -> IPv6 deny -> nftables UID kill-switch -> destructive leak tests -> managed production traffic.
 
 No migration, business-code patch, generator run, deployment, or host change belongs to Phase 0.5.
@@ -367,7 +370,7 @@ No migration, business-code patch, generator run, deployment, or host change bel
 
 - HTTPUpstream request-host validation is configuration-dependent; when URL allowlisting/private-host blocking is disabled, custom base URLs may target internal networks. Egress routing does not replace SSRF validation.
 - Managed accounts forbid custom_base_url in V1; unmanaged compatibility paths still retain the upstream SSRF/destination-policy risk.
-- expected_exit_ipv4 is mandatory policy, but it is trustworthy only while a recent ProxyExitInfoProber result exactly matches it and route CountryCode.
+- expected_exit_ipv4 is mandatory policy, but it is trustworthy only while a recent company-owned dual-HTTPS probe agrees on the exact public IPv4 and country. The endpoint pair is not yet approved, so this remains UNKNOWN.
 - V1 intentionally stores no dns_addr; DNS containment is an external Guard/nftables responsibility.
 - Resolver-based SSRF checks can leak DNS before a proxied connection.
 - OAuth sessions currently store raw resolved ProxyURL, are not route-version bound, and allow callback override.
@@ -387,3 +390,5 @@ No migration, business-code patch, generator run, deployment, or host change bel
 ## Audit conclusion
 
 At e8cb019, the specification's core data model and HTTPUpstream decoration are compatible with the source, but the security boundary must be broader than HTTPUpstream. Phase 1 should make route resolution the authority for every account-bound client family and use host controls as the final deny layer. Until that work and its tests are complete, no claim of leak-free egress is justified.
+
+The exhaustive primitive inventory, batch-provider evidence, dependency behavior, fifteen final answers and freeze decision are recorded in `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Security-sensitive UNKNOWN items remain: Antigravity route classification, the dual-HTTPS evidence operators, the real fixed exit IPv4 values and tested host enforcement. Final design verdict: **DO NOT FREEZE**.
