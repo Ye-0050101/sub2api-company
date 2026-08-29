@@ -122,45 +122,43 @@ nftables final kill switch
 
 These are mandatory.
 
-1. No valid EgressRoute:
-   FAIL CLOSED.
+1. No valid EgressRoute: FAIL CLOSED.
 
-2. Disabled EgressRoute:
-   FAIL CLOSED.
+2. Route class or required country mismatch: FAIL CLOSED.
 
-3. Route class mismatch:
-   FAIL CLOSED.
+3. Empty or invalid effective proxy: FAIL CLOSED.
 
-4. Required country mismatch:
-   FAIL CLOSED.
+4. International providers must never use CN-DIRECT.
 
-5. Empty effective proxy:
-   FAIL CLOSED.
+5. Claude/OpenAI/Grok/Gemini: INTERNATIONAL_PROXY only.
 
-6. Invalid proxy endpoint:
-   FAIL CLOSED.
+6. DeepSeek/Kimi/Zhipu: CN_DIRECT allowed.
 
-7. International providers must never use CN-DIRECT.
+7. EgressRoute stores ProxyID, never ProxyURL.
 
-8. Claude/OpenAI/Grok/Gemini:
-   INTERNATIONAL_PROXY only.
+8. Managed Account.ProxyID must equal EgressRoute.ProxyID.
 
-9. DeepSeek/Kimi/Zhipu:
-   CN_DIRECT allowed.
+9. A route Proxy must be socks5h, use a literal internal IP, contain no credentials, use fallback_mode=none, have backup_proxy_id=NULL and expires_at=NULL.
 
-10. Sub2API itself must not have unrestricted public IPv4 access.
+10. A Proxy referenced by an EgressRoute cannot be modified or deleted through ordinary Proxy administration.
 
-11. Sub2API itself must not have unrestricted public IPv6 access.
+11. Core EgressRoute fields cannot be modified while the route is referenced.
 
-12. Proxy failure must never fall back to host direct connection.
+12. Managed accounts cannot use custom_base_url.
 
-13. OAuth, token exchange, token refresh, usage queries, account tests and normal inference requests for one account must use that account's EgressRoute.
+13. security.proxy_fallback.allow_direct_on_error must be forced to false.
 
-14. AnyTLS/HY2 passwords, certificates and VPS secrets do NOT belong in Sub2API DB.
+14. Sub2API itself must not have unrestricted public IPv4, public IPv6 or direct DNS access.
 
-15. AnyTLS/HY2 implementation stays outside Sub2API.
+15. Proxy failure and AnyTLS/HY2 failure must never fall back to a Sub2API host-direct connection. AnyTLS/HY2 fallback is handled only inside sing-box.
 
-16. DNS leak prevention is primarily an OS/sing-box responsibility, not something to solve by invasive modifications throughout Sub2API.
+16. OAuth, token exchange, token refresh, usage queries, account tests, WebSocket and normal inference requests for one account must use that account's EgressRoute.
+
+17. Grok password authentication is disabled in V1.
+
+18. AnyTLS/HY2 passwords, certificates and VPS secrets do NOT belong in Sub2API DB; their implementation remains outside Sub2API.
+
+19. DNS leak prevention is primarily an OS/sing-box responsibility, not something to solve by invasive modifications throughout Sub2API.
 
 ---
 
@@ -218,17 +216,15 @@ Add new entity:
 
 EgressRoute
 
-Suggested fields:
+V1 fields:
 
 id
 route_key
 name
 route_class
 country_code
-proxy_url
-dns_addr
+proxy_id
 expected_exit_ipv4
-enabled
 notes
 created_at
 updated_at
@@ -247,8 +243,8 @@ INTERNATIONAL_PROXY
 country_code:
 US
 
-proxy_url:
-socks5h://127.0.0.1:11001
+proxy_id:
+<FK to an existing internal socks5h Proxy>
 
 
 SG-A
@@ -259,8 +255,8 @@ INTERNATIONAL_PROXY
 country_code:
 SG
 
-proxy_url:
-socks5h://127.0.0.1:12001
+proxy_id:
+<FK to an existing internal socks5h Proxy>
 
 
 CN-DIRECT
@@ -271,8 +267,8 @@ CN_DIRECT
 country_code:
 CN
 
-proxy_url:
-socks5h://127.0.0.1:13001
+proxy_id:
+<FK to an existing internal socks5h Proxy>
 
 
 Important:
@@ -280,6 +276,16 @@ Important:
 Even CN-DIRECT uses an internal SOCKS endpoint from Sub2API's perspective.
 
 Sub2API never gets a special unrestricted `direct` branch.
+
+EgressRoute does not duplicate ProxyURL. The runtime URL is resolved through the Proxy foreign key.
+
+The referenced Proxy must use socks5h with a literal internal IP and no credentials. It must have fallback_mode=none, backup_proxy_id=NULL and expires_at=NULL.
+
+V1 does not add route.enabled or dns_addr.
+
+A referenced route's core fields — route_key, route_class, country_code, proxy_id and required-country policy — are immutable until every account reference is removed.
+
+A Proxy referenced by an EgressRoute is protected from ordinary modification and deletion.
 
 ---
 
@@ -290,6 +296,10 @@ Add minimal first-class fields:
 EgressRouteID *int64
 
 RequiredEgressCountry *string
+
+Existing ProxyID *int64 remains present and, for a managed account, must equal EgressRoute.ProxyID at create, update, clone, bulk-update and request resolution time.
+
+Managed accounts must not set or retain custom_base_url.
 
 Do NOT globally embed/load the entire EgressRoute object into every Account hot-path query unless necessary.
 
@@ -393,8 +403,8 @@ RouteID
 RouteKey
 RouteClass
 CountryCode
+ProxyID
 ProxyURL
-DNSAddr
 ExpectedExitIPv4
 
 Resolver checks:
@@ -402,11 +412,14 @@ Resolver checks:
 - account exists
 - route assigned
 - route exists
-- route enabled
 - required country exists
 - country matches
 - platform allowed for route class
-- proxy URL valid/internal
+- account ProxyID equals route ProxyID
+- referenced Proxy exists
+- referenced Proxy satisfies the socks5h/literal-internal-IP/no-credentials/no-fallback/no-expiry rules
+- managed account has no custom_base_url
+- security.proxy_fallback.allow_direct_on_error is false
 
 No valid result:
 return error
@@ -438,7 +451,11 @@ accountID
   ↓
 resolver.ResolveForAccount()
   ↓
-effective ProxyURL
+route ProxyID (must equal Account.ProxyID)
+  ↓
+validated Proxy record
+  ↓
+derived effective ProxyURL
   ↓
 official HTTPUpstream
 
@@ -470,17 +487,21 @@ OAuth session should preserve selected EgressRoute identity.
 
 OAuth authorization, code exchange and subsequent created account must use the same route.
 
+The session must also preserve the final ProxyID. Callback/code exchange must reject route or ProxyID drift.
+
 ## Token Refresh
 
 Existing refresh logic may use legacy ProxyID.
 
 Company version must resolve EgressRoute instead.
 
+Claude, OpenAI, Grok and Gemini authorization, token exchange and refresh all use the same route and final ProxyID.
+
 ## Usage Queries
 
 Some Claude usage paths currently bypass HTTPUpstream when TLS profile is absent.
 
-Company version should route usage through CompanyHTTPUpstream or otherwise resolve EgressRoute consistently.
+Company V1 must route Claude usage through CompanyHTTPUpstream even when no TLS Profile is selected.
 
 ## Account Connectivity Tests
 
@@ -495,6 +516,10 @@ one account
 → OAuth/refresh/usage/inference all consistent
 
 Do not assume they automatically use HTTPUpstream.
+
+Grok password authentication is disabled in V1.
+
+OpenAI/Grok WebSocket must resolve and validate the final ProxyID against EgressRoute.ProxyID before dialing.
 
 ---
 
@@ -518,6 +543,17 @@ Legacy features may remain for upstream compatibility.
 
 Do not mass-edit all account.Proxy usages unless required for security-critical account flows.
 
+For managed accounts:
+
+- account.proxy_id must equal route.proxy_id
+- custom_base_url is forbidden
+- security.proxy_fallback.allow_direct_on_error is forced false
+- Sub2API proxy fallback cannot be used for AnyTLS/HY2 failure
+
+AnyTLS/HY2 primary/backup behavior remains entirely inside sing-box.
+
+Proxy administration must reject ordinary update/delete operations when the Proxy is referenced by an EgressRoute.
+
 ---
 
 # 13. Database Migration
@@ -533,6 +569,8 @@ required_egress_country
 Do NOT initially make egress_route_id NOT NULL because existing production accounts already exist.
 
 Strict application logic determines schedulability / request rejection.
+
+The new egress_routes table stores proxy_id as an FK to the existing proxies table. It does not store proxy_url, enabled or dns_addr.
 
 Applied migrations are immutable.
 
@@ -589,6 +627,12 @@ backend/internal/repository/wire.go
 OAuth service/handler paths
 
 Claude usage path
+
+OpenAI/Grok WebSocket path
+
+Proxy admin update/delete guards
+
+security.proxy_fallback setting enforcement
 
 Admin account API
 
@@ -750,9 +794,6 @@ At minimum:
 AccountWithoutRoute
 → rejected
 
-DisabledRoute
-→ rejected
-
 CountryMismatch
 → rejected
 
@@ -814,6 +855,33 @@ DNS capture
 
 IPv6
 → no public IPv6 escape
+
+ReferencedProxyMutation
+→ rejected
+
+ReferencedProxyDeletion
+→ rejected
+
+ReferencedRouteCoreMutation
+→ rejected while referenced
+
+AccountProxyRouteProxyMismatch
+→ rejected
+
+ManagedCustomBaseURL
+→ rejected
+
+GrokPasswordAuth
+→ disabled
+
+OpenAIWebSocketProxyIDMismatch
+→ rejected before dial
+
+ClaudeUsageWithoutTLSProfile
+→ still routed through CompanyHTTPUpstream
+
+DirectFallbackSetting
+→ forced false
 
 ---
 
@@ -925,19 +993,19 @@ Phase 3:
 CompanyHTTPUpstream wrapper
 
 Phase 4:
-Claude OAuth consistency
+Claude/OpenAI/Grok/Gemini OAuth and refresh consistency
 
 Phase 5:
-OpenAI/Grok/Gemini OAuth audit + consistency
+Claude usage and other usage/quota consistency
 
 Phase 6:
-Usage/refresh/account-test consistency
+OpenAI/Grok WebSocket and account-test consistency
 
 Phase 7:
 route class platform policy
 
 Phase 8:
-unit/security tests
+Proxy/route immutability, no-custom-base-URL and fail-closed tests
 
 Phase 9:
 build company binary

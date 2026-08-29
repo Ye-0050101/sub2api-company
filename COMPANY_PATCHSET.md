@@ -25,6 +25,8 @@ Phase 1 must preserve upstream behavior except where an outbound request would o
 
 Migration files are names reserved for Phase 1. They are not generated or created in Phase 0.5.
 
+The EgressRoute table uses proxy_id as a foreign key to the existing Proxy table. It does not store proxy_url, enabled, or dns_addr in V1.
+
 ## Planned small upstream edits
 
 ### Account persistence and API
@@ -51,6 +53,8 @@ Migration files are names reserved for Phase 1. They are not generated or create
 - backend/cmd/server/wire.go — include providers where required.
 - frontend/src/router/index.ts — register the route-management page.
 
+Route validation must require the referenced Proxy to be socks5h with a literal internal IP and no credentials, fallback, backup, or expiry. Ordinary Proxy update/delete is rejected while referenced, and route_key, route_class, country_code, proxy_id, and required-country policy are immutable while the route is referenced.
+
 Generated backend/cmd/server/wire_gen.go and Ent generated files may change only by running the project generators in Phase 1; they must not be hand-edited.
 
 ### Account-bound paths not covered by HTTPUpstream
@@ -59,6 +63,12 @@ Generated backend/cmd/server/wire_gen.go and Ent generated files may change only
 - backend/internal/service/openai_oauth_service.go
 - backend/internal/service/grok_oauth_service.go
 - backend/internal/service/gemini_oauth_service.go
+- backend/internal/service/admin_proxy.go
+- backend/internal/repository/proxy_repo.go
+- backend/internal/config/config.go
+- backend/internal/service/gateway_forward.go
+- backend/internal/service/gateway_upstream_request.go
+- backend/internal/service/gateway_count_tokens.go
 - backend/internal/pkg/oauth/oauth.go
 - backend/internal/pkg/openai/oauth.go
 - backend/internal/pkg/xai/oauth.go
@@ -90,19 +100,23 @@ The exact edit subset must be kept minimal during implementation: first centrali
 
 1. Add the model, repository, validation, and admin CRUD without changing request routing.
 2. Add a fail-closed EgressResolver keyed by account ID.
-3. Decorate HTTPUpstream.Do and DoWithTLS. For account-bound calls, the resolved route overrides caller-supplied proxy_url. Missing, disabled, class-mismatched, or invalid routes return an error; they never become an empty proxy.
-4. Bind OAuth authorization sessions to egress_route_id plus a route fingerprint/version, and reject callback overrides or route drift.
-5. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, and WebSocket handshakes through route-aware factories.
-6. Add explicit tests for empty route, disabled route, route-class mismatch, proxy parse failure, socks5-to-socks5h normalization, custom base URL, callback route drift, and WebSocket.
-7. Only after application tests pass, coordinate the separately reviewed sing-box Guard, nftables, IPv6 deny, and DNS-containment deployment.
+3. Decorate HTTPUpstream.Do and DoWithTLS. Resolve route.proxy_id, require account.proxy_id equality, validate the referenced Proxy, and derive the effective URL. Missing, class-mismatched, inconsistent, or invalid routes return an error; they never become an empty proxy.
+4. Bind Claude/OpenAI/Grok/Gemini OAuth authorization sessions to egress_route_id plus final proxy_id, and reject callback overrides or drift. Use the same route for exchange and refresh.
+5. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, and WebSocket handshakes through route-aware factories. Claude usage without a TLS Profile still uses CompanyHTTPUpstream.
+6. Disable Grok password authentication in V1. Reject custom_base_url for managed accounts. Force security.proxy_fallback.allow_direct_on_error to false.
+7. Validate OpenAI/Grok WebSocket final ProxyID against EgressRoute.ProxyID before dialing.
+8. Add explicit tests for empty route, route-class mismatch, account/route ProxyID mismatch, invalid Proxy shape, referenced Proxy/route mutation, custom base URL, callback drift, Claude usage without TLS Profile, WebSocket ProxyID drift, and direct-fallback configuration.
+9. Only after application tests pass, coordinate the separately reviewed sing-box Guard, nftables, IPv6 deny, and DNS-containment deployment. AnyTLS/HY2 fallback exists only inside sing-box.
 
 ## Compatibility and rollback
 
 - Keep legacy proxy_id during the migration window; EgressRoute is authoritative only when the company feature switch is enabled.
+- For every managed account, account.proxy_id must equal route.proxy_id.
 - Use a compile-time or startup configuration switch with a documented rollback path.
 - Do not silently translate a missing EgressRoute into legacy direct access.
 - Rollback must disable the company enforcement provider before dropping any schema fields.
 - Existing public APIs remain compatible by adding nullable fields; company policy validation may reject previously accepted unsafe configurations.
+- EgressRoute core fields and referenced Proxy records remain locked while referenced.
 
 ## Explicit non-claims
 
@@ -114,5 +128,6 @@ This document does not claim that:
 - socks5h alone prevents every local lookup.
 - sing-box Guard, nftables, IPv6 deny, or database migrations are deployed.
 - the expected exit IP has been verified.
+- route.enabled or dns_addr exists in V1.
 
 Those properties require Phase 1 code, tests, and the separately controlled host enforcement layers.
