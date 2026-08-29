@@ -14,20 +14,20 @@ Source changes, migrations, generators, deployment and host changes: not perform
 - **LOCKED DEPENDENCY**: behavior observed in a version selected by `go.mod`/`go.sum`; supporting evidence, not an upstream guarantee.
 - **DESIGN**: proposed company control, not implemented at this baseline.
 - **HOST REQUIRED**: application source cannot establish the property.
-- **UNKNOWN**: supplied evidence cannot prove the property. A security-sensitive UNKNOWN blocks design freeze.
+- **UNKNOWN**: supplied evidence cannot prove the property. The report distinguishes an architecture-design UNKNOWN from a deployment/production-readiness input that is intentionally populated later.
 
 ## Executive verdict
 
-The fixed source proves that account-level deterministic egress is architecturally feasible, but also proves that `HTTPUpstream` is only a partial transport boundary. OAuth, refresh, usage, WebSocket, Vertex service-account token exchange, Antigravity, Gemini/Vertex batch processing and numerous non-account clients construct independent clients. Empty proxy values are direct-capable in multiple production paths.
+The fixed source proves that account-level deterministic egress is architecturally feasible, but also proves that `HTTPUpstream` is only a partial transport boundary. OAuth, refresh, usage, WebSocket, Vertex service-account token exchange, Gemini/Vertex batch processing and numerous non-account clients construct independent clients. Empty proxy values are direct-capable in multiple production paths.
 
-Four security-sensitive facts remain UNKNOWN:
+The architecture blockers are now resolved by explicit policy:
 
-1. Antigravity exists but has no approved V1 route-class assignment.
-2. The two independent HTTPS RouteHealth evidence operators have not been selected and approved.
-3. The real fixed public IPv4 values for CN-DIRECT, US-A and SG-A were not supplied or verified.
-4. The final host policy and destructive leak tests have not been applied or evidenced.
+1. Managed Antigravity is UNSUPPORTED and always FAIL CLOSED in V1; future support requires a separate V2 route audit.
+2. RouteHealth evidence is locked at compile time to `https://api.ipify.org?format=json` and `https://cloudflare.com/cdn-cgi/trace` under exact validation rules.
+3. CN-DIRECT retains route class CN_DIRECT and country CN; real CN/US/SG fixed `expected_exit_ipv4` values are deployment inputs verified before activation.
+4. Linux UID policy is explicitly the origin-leak boundary, while per-account country selection is an application invariant.
 
-Application route enforcement and an operating-system UID kill-switch are both required.
+Therefore `FINAL DESIGN VERDICT: FREEZE`. The separate deployment gate remains `PRODUCTION READINESS: NOT READY`; no managed production traffic is allowed until all activation controls pass.
 
 ## 1. Baseline and tree identity
 
@@ -37,7 +37,7 @@ Application route enforcement and an operating-system UID kill-switch are both r
 | `production-base-0.1.183` | `e8cb019fabf8b55199436229044cbf9aa7a82564` | `f08b15f70e98dd19ac3f22cd3ab9cd3957ccd69f` |
 | local `main` at audit time | same audited source tree | `f08b15f70e98dd19ac3f22cd3ab9cd3957ccd69f` |
 
-The commit is `Merge pull request #6078 from Wei-Shaw/codex/fix-multimodal-support-in-responses`. The upstream fetch URL is `https://github.com/Wei-Shaw/sub2api.git`; upstream push is disabled. The audit used the fixed object, not moving upstream main.
+The commit subject is `Merge pull request #6078 from YogaSakti/fix/responses-custom-tool-call-id`; its body is `fix(openai): keep restored tool-call item IDs typed`. The upstream fetch URL is `https://github.com/Wei-Shaw/sub2api.git`; upstream push is disabled. The audit used the fixed object, not moving upstream main.
 
 Verdict: **PASS DESIGN** for baseline provenance.
 
@@ -141,8 +141,8 @@ Non-account operation
 | Gemini batch | batch Gemini provider | empty-proxy client, DefaultClient fallback | no | NEEDS PATCH |
 | Vertex token | `vertex_service_account.go:179-250` | empty proxy direct client | no | NEEDS PATCH |
 | Vertex batch/GCS | batch Vertex provider | independent empty-proxy client | no | NEEDS PATCH |
-| Antigravity OAuth/refresh/quota | Antigravity services/client | own client, empty direct | no | UNKNOWN route class |
-| Antigravity inference | gateway -> HTTPUpstream | empty caller proxy direct | yes | UNKNOWN route class |
+| Antigravity OAuth/refresh/quota | Antigravity services/client | own client, empty direct | no | UNSUPPORTED; managed FAIL CLOSED |
+| Antigravity inference | gateway -> HTTPUpstream | empty caller proxy direct | yes | UNSUPPORTED; managed FAIL CLOSED |
 | DeepSeek/Kimi/Zhipu | CN inference/test/balance/quota principal paths | empty caller proxy direct | yes | NEEDS PATCH |
 | Composite | scheduler selects underlying account | must route selected account | indirect | NEEDS PATCH |
 | Bedrock/Vertex Anthropic | HTTPUpstream plus Vertex token helper | mixed | partial | NEEDS PATCH |
@@ -165,17 +165,17 @@ Wrapper feasibility: **PASS DESIGN**. Wrapper completeness as the sole boundary:
 
 ## 6. SOCKS and dependency behavior
 
-Official source proves the project normalizes `socks5` to `socks5h` before approved HTTP transport configuration. The locked `golang.org/x/net v0.56.0` SOCKS implementation sends a hostname target to the SOCKS server when it is not already a literal address. Locked `github.com/coder/websocket v1.8.14` uses an HTTP client for the handshake and a default client when none is supplied.
+Official source proves the project normalizes `socks5` to `socks5h` before approved HTTP transport configuration. Locked `golang.org/x/net v0.56.0` sends both `socks5` and `socks5h` from `proxy.FromURL` into the same SOCKS5 dialer. For a hostname, `internal/socks` encodes an FQDN SOCKS address and sends it to the SOCKS server. Current dependency evidence therefore does not support “socks5 is necessarily local DNS while only socks5h is remote DNS.” Locked `github.com/coder/websocket v1.8.14` uses an HTTP client for its handshake and a default client when none is supplied.
 
 Those are **LOCKED DEPENDENCY** facts, not substitutes for runtime tests. V1 must:
 
-- require route Proxy protocol exactly `socks5h`;
+- require route Proxy protocol exactly `socks5h` as canonical company policy, future-proof explicit remote-DNS intent and uniform parser/configuration semantics;
 - require the proxy endpoint to be a canonical literal internal IPv4;
 - pass target hostnames without application pre-resolution;
 - use `proxyurl.Parse` plus `proxyutil.ConfigureTransportProxy` for WebSocket and HTTP;
 - test the built binary for remote target DNS through SOCKS.
 
-Raw `url.Parse(proxyURL)` in `service/openai_ws_client.go:155` is a policy-parser bypass even if the current Go transport understands SOCKS. It does not enforce supported schemes, host presence or normalization.
+Go 1.27 `net/http.Transport` supports socks5 and socks5h Proxy URLs. Raw `url.Parse(proxyURL)` in `service/openai_ws_client.go:155` is a project policy-parser bypass, not evidence that Go lacks SOCKS5H. It does not enforce supported schemes, host presence or canonical normalization. Required WebSocket construction is `proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`.
 
 ## 7. Existing Proxy semantics and fallback risk
 
@@ -236,11 +236,11 @@ Approved supplied mapping:
 
 - Claude/OpenAI/Grok/Gemini -> `INTERNATIONAL_PROXY`.
 - DeepSeek/Kimi/Zhipu -> `CN_DIRECT` through local SOCKS5H owned by `sing-box-cn`; Sub2API is never direct.
-- Antigravity -> **UNKNOWN**; it exists in source but the policy does not assign it.
+- Antigravity -> **UNSUPPORTED** for managed V1 and always FAIL CLOSED. Do not infer US or SG. Future support requires a separate V2 route audit.
 - Composite -> selected underlying account.
-- Bedrock, Vertex, Upstream and Ollama Cloud variants require explicit mapping, not an implicit default.
+- Bedrock, Vertex, Upstream and Ollama Cloud variants require explicit reviewed mapping. Any account type not present in the V1 managed allowlist is UNSUPPORTED and FAIL CLOSED by default.
 
-Verdict: **NEEDS PATCH** and **UNKNOWN** for incomplete policy.
+Verdict: **PASS DESIGN / NEEDS PATCH**. The allowlist is explicit and closed by default.
 
 ## 9. Managed custom base URL
 
@@ -269,7 +269,7 @@ Required design:
 4. Refresh resolves current account route and never accepts caller raw proxy URL.
 5. Enrichment/project/tier/privacy helper calls use the same decision.
 6. Grok password authentication is disabled in V1.
-7. Antigravity receives the same treatment after route class approval.
+7. Managed Antigravity is rejected before outbound; V1 has no Antigravity route factory.
 
 Verdict: **NEEDS PATCH**. Current OAuth/refresh is not route-consistent.
 
@@ -284,15 +284,15 @@ Existing `ProxyExitInfoProber` is not a security authority:
 
 Required company verifier:
 
-- exactly two independently operated, compile-time allowlisted HTTPS endpoints;
-- normal TLS verification; redirects disabled or restricted to the exact allowlisted authority;
-- bounded deadlines and response size;
-- probe through exact validated route Proxy and approved parser/dialer;
-- both responses return the same canonical public-unicast IPv4;
-- reject IPv6, private, loopback, link-local, multicast and unspecified answers;
-- country-bearing response has normalized ISO alpha-2 equal to route country;
-- both IPv4 values equal `expected_exit_ipv4`;
-- any error or mismatch immediately sets `UNHEALTHY`.
+- Probe A is exactly `https://api.ipify.org?format=json` and provides IPv4 evidence only.
+- Probe B is exactly `https://cloudflare.com/cdn-cgi/trace` and provides IPv4 plus `loc` CountryCode evidence.
+- Both are compile-time allowlist entries with exact HTTPS scheme, hostname, path and query where present.
+- Normal TLS verification, redirects disabled, bounded timeout and bounded response body are mandatory.
+- Administrators cannot modify the endpoints; there is no fallback to the upstream default HTTP probes.
+- Both probes use the exact validated route Proxy and approved parser/dialer.
+- READY requires `A.IP == B.IP`, `A.IP == expected_exit_ipv4`, and normalized `B.loc == route.country_code`.
+- The IP must be canonical public IPv4; IPv6, private, loopback, link-local, multicast and unspecified addresses are invalid.
+- TLS failure, redirect, parse failure, IPv6, private IP, missing `loc`, IP disagreement, expected-IP mismatch or country mismatch immediately sets `UNHEALTHY` and managed requests FAIL CLOSED.
 
 Runtime record:
 
@@ -307,9 +307,9 @@ Generation, Status(READY|UNHEALTHY), Reason
 
 Startup begins UNHEALTHY. Preflight must succeed before managed traffic. Target probe interval is 60 seconds and READY TTL 120 seconds. Any failure invalidates immediately; recovery requires a complete two-endpoint success. Resolver compares current fingerprints to the health record.
 
-This can prevent wrong exit, route/proxy drift and stale health only after endpoint pair and fixed expected IPs are approved. They are currently UNKNOWN.
+The endpoint pair is now an approved architecture constant. Real fixed CN/US/SG `expected_exit_ipv4` values are populated and verified during deployment; their absence keeps a route UNHEALTHY but does not make the architecture undefined.
 
-Verdict: **UNKNOWN**, freeze-blocking.
+Verdict: **PASS DESIGN / NEEDS PATCH**. RouteHealth is not implemented and production is not ready.
 
 ## 12. TOCTOU and concurrency
 
@@ -329,7 +329,7 @@ Verdict: **PASS DESIGN** for versioned snapshots; **NEEDS PATCH** at baseline.
 
 ## 13. DNS and IPv6 evidence
 
-Local DNS occurs explicitly in URL validation and channel-monitor SSRF protection, and implicitly in direct/default dial paths. SOCKS target resolution can be remote only if callers preserve hostnames and use the approved dialer. Literal internal proxy IP removes proxy-endpoint DNS but not application SSRF lookups.
+Local DNS occurs explicitly in URL validation and channel-monitor SSRF protection, and implicitly in direct/default dial paths. Locked x/net sends hostname targets to the SOCKS server for both accepted SOCKS labels, but only if callers preserve hostnames and use the approved dialer. Literal internal proxy IP removes proxy-endpoint DNS but not application SSRF lookups.
 
 No application-wide `tcp4` or IPv6 prohibition exists. Direct Go dialers may use IPv6. Therefore:
 
@@ -388,7 +388,15 @@ application code/tests
 
 No ordinary production switch may disable enforcement while service continues. Rollback deploys a previously approved enforcing binary.
 
-## 16. Final evidence matrix
+## 16. Threat Model: Origin Leak versus Account Geography
+
+One Sub2API process/UID handles accounts from multiple countries. Linux UID/nftables can enforce no host public direct, no unintended IPv6 and no direct DNS. Linux does not know Account identity and cannot by itself enforce `US account -> only US SOCKS` or `SG account -> only SG SOCKS` when both local endpoints are allowed to the same UID.
+
+Per-account geographic selection is an application invariant enforced by EgressRoute, immutable EgressDecision, route-aware HTTP/WS/OAuth/Refresh/Usage/Batch factories, CI/static guard and tests. The host guard is the origin-leak boundary, not the account-country selection engine.
+
+If kernel-level per-country/account isolation is later required, use separate workers/UIDs/network namespaces after a V2 architecture audit. That is outside V1.
+
+## 17. Final evidence matrix
 
 | Property | Official source behavior | Company control | Verdict |
 |---|---|---|---|
@@ -397,55 +405,61 @@ No ordinary production switch may disable enforcement while service continues. R
 | WebSocket policy | raw parser; optional client | company WS dialer | NEEDS PATCH |
 | batch Gemini/Vertex | independent empty-proxy client | route-aware factory | NEEDS PATCH |
 | Proxy active/deleted | URL ignores state | joined resolver + locks | NEEDS PATCH |
-| exit identity | diagnostic prober is weak | dual HTTPS health | UNKNOWN |
+| exit identity | diagnostic prober is weak | locked ipify + Cloudflare HTTPS health | PASS DESIGN / NEEDS PATCH |
 | DNS | explicit/implicit resolver paths | app changes + containment | HOST REQUIRED |
 | IPv6 | generic `tcp` dialers | UID IPv6 deny | HOST REQUIRED |
 | tunnel failure | empty/fallback paths exist | app fail closed + kernel deny | NEEDS PATCH / HOST REQUIRED |
 | origin secrecy | many non-account clients | UID kill-switch | HOST REQUIRED |
 
-## 17. Minimum Phase 1 patch set
+## 18. Minimum Phase 1 patch set
 
 1. Add EgressRoute/Account persistence through normal generators; never hand-edit generated code.
 2. Add route repository, validation, referenced-Proxy locks and duplicate canonical endpoint rejection.
 3. Add dual-HTTPS RouteHealth and versioned immutable EgressDecision.
 4. Decorate HTTPUpstream while retaining raw upstream transport behind it.
 5. Bind Claude/OpenAI/Grok/Gemini OAuth start, exchange, refresh and helpers to one route; disable Grok password auth.
-6. Decide Antigravity and other account-type route policy before managed activation.
+6. Reject every managed Antigravity account as UNSUPPORTED before outbound; future support is V2.
 7. Route Claude no-TLS usage, OpenAI quota/Codex probes, Gemini helpers, Vertex token exchange and Gemini/Vertex batch through company clients.
 8. Replace OpenAI/Grok WS raw parsing with `proxyurl.Parse`, approved dialer and final ProxyID validation.
 9. Reject managed custom base URL at every mutation/request boundary.
 10. Fail production startup when direct fallback is enabled or enforcement disabled.
-11. Add CI guards for new DefaultClient, direct clients/dialers, raw proxy parser and resolver primitives.
+11. Add static CI that rejects new managed account-sensitive `http.DefaultClient`, raw `url.Parse(proxyURL)`, empty-ProxyURL client, direct `net.Dialer`, unapproved resolver or unapproved account outbound factory unless explicitly audit-allowlisted.
 12. After application tests, implement and destructively verify host boundary in mandatory order.
 
-## 18. Required security tests
+## 19. Required security tests
 
 Application tests:
 
-`NoRoute`, `RouteClassMismatch`, `CountryMismatch`, `AccountProxyRouteMismatch`, `ProxyInactive`, `ProxyDeleted`, `ProxySoftDeleted`, `ProxyExpired`, `ProxyFallbackDirect`, `ProxyFallbackBackup`, `ProxyCredentialsPresent`, `ProxyHostname`, `ProxyPublicIP`, `ProxyWrongProtocol`, `DuplicateRouteProxyID`, `DuplicateRouteEndpoint`, `ManagedCustomBaseURL`, `OAuthRouteDrift`, `OAuthProxyOverride`, `RefreshRouteDrift`, `ClaudeUsageNoTLS`, `OpenAIWSNoRoute`, `OpenAIWSProxyMismatch`, `OpenAIWSInvalidProxy`, `WebSocketRawProxyParserBypass`, `BatchProviderNoRoute`, `VertexTokenNoRoute`, `AntigravityRouteClassUnknown`, `RouteHealthNoPreflight`, `RouteHealthExpired`, `RouteHealthProxyChanged`, `RouteHealthFingerprintMismatch`, `ExitIPv4Mismatch`, `ExitCountryMismatch`, `ProbeHTTPSRequired`, `ProbeTLSFailure`, `ProbeRedirectRejected`, `ProbeIPDisagreement`, `ProbeIPv6Returned`, `ProbePrivateIPReturned`, `ProbeCountryMissing`, `ProbeCountryMismatch`, `ProbeExpectedIPMismatch`, `ProcessRestartBeforeHealth`, `DirectFallbackConfigTrue`.
+`NoRoute`, `RouteClassMismatch`, `CountryMismatch`, `AccountProxyRouteMismatch`, `ProxyInactive`, `ProxyDeleted`, `ProxySoftDeleted`, `ProxyExpired`, `ProxyFallbackDirect`, `ProxyFallbackBackup`, `ProxyCredentialsPresent`, `ProxyHostname`, `ProxyPublicIP`, `ProxyWrongProtocol`, `DuplicateRouteProxyID`, `DuplicateRouteEndpoint`, `ManagedCustomBaseURL`, `OAuthRouteDrift`, `OAuthProxyOverride`, `RefreshRouteDrift`, `ClaudeUsageNoTLS`, `OpenAIWSNoRoute`, `OpenAIWSProxyMismatch`, `OpenAIWSInvalidProxy`, `WebSocketRawProxyParserBypass`, `BatchProviderNoRoute`, `VertexTokenNoRoute`, `ManagedAntigravityUnsupported`, `RouteHealthNoPreflight`, `RouteHealthExpired`, `RouteHealthProxyChanged`, `RouteHealthFingerprintMismatch`, `ExitIPv4Mismatch`, `ExitCountryMismatch`, `ProbeHTTPSRequired`, `ProbeTLSFailure`, `ProbeRedirectRejected`, `ProbeIPDisagreement`, `ProbeIPv6Returned`, `ProbePrivateIPReturned`, `ProbeCountryMissing`, `ProbeCountryMismatch`, `ProbeExpectedIPMismatch`, `ProcessRestartBeforeHealth`, `DirectFallbackConfigTrue`, `CIUnapprovedDefaultClient`, `CIEmptyProxyClient`, `CIUnapprovedResolver`, `CIUnapprovedOutboundFactory`.
 
 Host/staging tests:
 
 `TunnelDown`, `SOCKSDown`, `GuardDown`, `DNSBlocked`, `ExternalDNSDenied`, `IPv6Blocked`, `DirectProviderIPv4Blocked`, `DefaultClientPublicBlocked`, `NonAccountPublicDirectBlocked`, `InternalDBAllowed`, `InternalRedisAllowed`, `ApprovedResolverAllowed`, and restart before health recovery.
 
-## 19. Answers to the fifteen final questions
+## 20. Answers to the fifteen final questions
 
 1. **Can official source support account-level deterministic egress?** Architecturally yes: account identity reaches HTTPUpstream and company factories can be added. Current code does not enforce it. **PASS DESIGN / NEEDS PATCH**.
-2. **Which exits can application enforce?** Account HTTP, OAuth/refresh, usage/quota, tests, Vertex/Antigravity/batch clients and WS after all receive EgressDecision and approved client/dialer. **NEEDS PATCH**.
+2. **Which exits can application enforce?** Supported managed-account HTTP, OAuth/refresh, usage/quota, tests, Vertex token/batch clients and WS after all receive EgressDecision and approved client/dialer. Managed Antigravity is rejected before outbound. **NEEDS PATCH**.
 3. **Which exits require host fail-closed?** Future/third-party clients, non-account public clients, local DNS, IPv6, defaults/environment and missed primitives. **HOST REQUIRED**.
-4. **Any account-sensitive outbound outside EgressRoute?** Yes: current OAuth/refresh helpers, Claude no-TLS usage, OpenAI usage/privacy, WS, Antigravity, Vertex token exchange and Gemini/Vertex batch. Antigravity class is UNKNOWN. **NEEDS PATCH / UNKNOWN**.
+4. **Any account-sensitive outbound outside EgressRoute?** In current upstream, yes: OAuth/refresh helpers, Claude no-TLS usage, OpenAI usage/privacy, WS, Vertex token exchange and Gemini/Vertex batch. The Phase 1 surface explicitly covers them; managed Antigravity and every unlisted account type are UNSUPPORTED and FAIL CLOSED. **NEEDS PATCH**, with no route-class ambiguity.
 5. **Any empty proxy to direct?** Yes in HTTPUpstream, httpclient/req, WS defaults, Vertex token, Antigravity and batch clients. **NEEDS PATCH**.
 6. **Any proxy error to direct fallback?** Yes in legacy fallback/direct mutation and selected client fallbacks; `allow_direct_on_error` is configurable. Parser failures are fail-fast only in some paths. **NEEDS PATCH**.
 7. **Any local DNS?** Yes, explicitly in URL/channel validation and implicitly in direct/default dialers. **HOST REQUIRED**.
 8. **Any IPv6 escape?** Yes; generic dialers and absence of application/host IPv6 deny leave it possible. **HOST REQUIRED**.
-9. **Does RouteHealth prevent wrong exit, port cross-wire, drift and stale health?** The fingerprinted dual-HTTPS design can after duplicate endpoint rejection. Exact endpoints are UNKNOWN and implementation absent. **UNKNOWN**.
-10. **Can CN-DIRECT pin China's real fixed public IPv4?** Design can compare it, but real value/live evidence were not supplied. **UNKNOWN**.
-11. **Can US-A pin the specified US VPS IPv4?** Architecturally yes; actual value/evidence not supplied. **UNKNOWN**.
-12. **Can SG-A pin the specified Singapore VPS IPv4?** Architecturally yes; actual value/evidence not supplied. **UNKNOWN**.
+9. **Does RouteHealth prevent wrong exit, port cross-wire, drift and stale health?** Yes by design: locked ipify/Cloudflare evidence, duplicate canonical endpoint rejection, immutable fingerprints/generation and TTL fail closed. Implementation is pending. **PASS DESIGN / NEEDS PATCH**.
+10. **Can CN-DIRECT pin China's real fixed public IPv4?** Yes. CN-DIRECT is fixed at class CN_DIRECT/country CN because the current main-server egress geolocates to China; deployment must populate and verify its exact fixed IPv4 before READY. **PASS DESIGN / NOT READY**.
+11. **Can US-A pin the specified US VPS IPv4?** Yes through mandatory expected_exit_ipv4 and locked RouteHealth equality. The actual value must be populated/verified during deployment. **PASS DESIGN / NOT READY**.
+12. **Can SG-A pin the specified Singapore VPS IPv4?** Yes through mandatory expected_exit_ipv4 and locked RouteHealth equality. The actual value must be populated/verified during deployment. **PASS DESIGN / NOT READY**.
 13. **If AnyTLS/HY2/SOCKS/Guard fails, can code return to main-server direct?** Currently yes through empty proxy and legacy direct fallback. Target design and kernel must fail closed. **NEEDS PATCH / HOST REQUIRED**.
-14. **After kernel enforcement, can origin-IP theoretically escape?** A correctly verified UID policy blocks ordinary escape, but rules/process identity/tests are absent here. Broad allowlists, another UID, privilege or misclassified dependency remain theoretical. **HOST REQUIRED / UNKNOWN until tested**.
-15. **Enough evidence to freeze V1?** No: Antigravity mapping, probe operators, real exit IPs and host evidence remain unresolved. **DO NOT FREEZE**.
+14. **After kernel enforcement, can origin-IP theoretically escape?** A correctly scoped and tested UID policy blocks ordinary Sub2API-process public-direct, IPv6 and DNS escape. It cannot select country per Account; that remains the application invariant. Misconfiguration/privilege are operational threats and the host rules are not yet deployed. **PASS DESIGN / NOT READY**.
+15. **Enough evidence to freeze V1?** Yes. Antigravity is explicitly unsupported, RouteHealth endpoints and semantics are fixed, and fixed exit values/host deployment are correctly classified as production-readiness inputs. **FREEZE**.
 
 ## FINAL DESIGN VERDICT
 
-**DO NOT FREEZE**
+**FREEZE**
+
+## PRODUCTION READINESS
+
+**NOT READY**
+
+Phase 1 development may begin after this document correction is accepted. Managed production traffic remains forbidden until real fixed exit IPv4 values are populated and verified, sing-box routes are deployed, DNS is contained, IPv6 is denied, the nftables Sub2API UID kill-switch is active, and destructive leak tests pass.

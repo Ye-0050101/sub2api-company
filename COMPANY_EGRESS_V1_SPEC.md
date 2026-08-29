@@ -206,7 +206,9 @@ net.DefaultResolver.LookupIP(...)
 
 Therefore socks5h alone does not guarantee that all DNS resolution happens through the account proxy.
 
-DNS leakage must be blocked at the OS/sing-box layer.
+For the locked dependency `golang.org/x/net v0.56.0`, `proxy.FromURL` sends both `socks5` and `socks5h` through the same SOCKS5 dialer. When the target is a hostname, `internal/socks` encodes it as an FQDN SOCKS address and sends it to the SOCKS server. The current dependency evidence therefore does not support a claim that `socks5` necessarily performs local DNS while only `socks5h` performs remote DNS.
+
+Company V1 still requires `protocol == socks5h` as canonical company policy, as an explicit and future-proof statement of remote-DNS intent, and to keep parser/configuration semantics uniform. DNS fail-closed requires application no-pre-resolution plus Guard, the approved resolver and nftables; the scheme label alone is not the security boundary.
 
 ---
 
@@ -277,6 +279,8 @@ Even CN-DIRECT uses an internal SOCKS endpoint from Sub2API's perspective.
 
 Sub2API never gets a special unrestricted `direct` branch.
 
+Current deployment fact: the main server public egress geolocates to China. CN-DIRECT therefore keeps `route_class = CN_DIRECT` and `country_code = CN`. Its real fixed `expected_exit_ipv4` is a deployment value that must be filled before activation and verified by RouteHealth.
+
 EgressRoute does not duplicate ProxyURL. The runtime URL is resolved through the Proxy foreign key.
 
 The referenced Proxy must use socks5h with a literal internal IP and no credentials. It must have fallback_mode=none, backup_proxy_id=NULL and expires_at=NULL.
@@ -290,7 +294,7 @@ Database constraints:
 - route_key is UNIQUE
 - proxy_id is UNIQUE and a foreign key to proxies.id
 
-One managed Proxy can belong to only one EgressRoute. This prevents the same internal endpoint from being labeled with conflicting country or route-class policy.
+One Proxy row can belong to only one EgressRoute. UNIQUE proxy_id alone does not prevent two Proxy rows naming the same listener, so managed canonical `(protocol, host, port)` endpoint duplication must also be rejected.
 
 A referenced route's core fields — route_key, route_class, country_code, proxy_id and required-country policy — are immutable until every account reference is removed.
 
@@ -339,6 +343,11 @@ INTERNATIONAL_PROXY only
 
 Gemini:
 INTERNATIONAL_PROXY only
+
+Antigravity:
+UNSUPPORTED for managed V1; any managed Antigravity account must FAIL CLOSED. Do not infer a US or SG route. Any future support requires a separate V2 route audit.
+
+Every account type not explicitly present in the managed V1 platform allowlist is UNSUPPORTED and FAIL CLOSED by default.
 
 DeepSeek:
 CN_DIRECT allowed
@@ -456,7 +465,13 @@ V1 health rules:
 - health TTL: 120 seconds from the last successful verified probe
 - probe timeout: a company-owned bounded deadline; do not inherit administrator-configurable diagnostic probe behavior
 - probe transport: derive the URL from the validated route Proxy and use the approved company parser/dialer; the current ProxyExitInfoProber is not a security authority because its defaults are HTTP, it accepts configured replacements, it returns the first success, and ipify supplies no country
-- probe evidence: exactly two independently operated, compile-time allowlisted HTTPS endpoints must agree on one public IPv4; the country-bearing response must match route.country_code; exact operators require explicit approval before freeze
+- Probe A is exactly `https://api.ipify.org?format=json` and supplies IPv4 evidence only
+- Probe B is exactly `https://cloudflare.com/cdn-cgi/trace` and supplies IPv4 plus `loc` CountryCode evidence
+- both endpoints are a compile-time allowlist with exact HTTPS scheme, hostname, path and query where present; normal TLS verification, redirects disabled, bounded timeout and bounded body are mandatory
+- administrators cannot modify either endpoint, and the verifier cannot fall back to upstream default HTTP probes
+- READY requires `A.IP == B.IP`, `A.IP == expected_exit_ipv4`, and `B.loc == route.country_code`
+- evidence IP must be canonical public IPv4
+- TLS failure, redirect, parse failure, IPv6, private IP, missing `loc`, IP disagreement, IP mismatch or country mismatch immediately produces UNHEALTHY and FAIL CLOSED
 - probe failure: immediately mark UNHEALTHY; do not retain READY until TTL
 - stale/expired health: treat as UNHEALTHY and fail closed
 - exit IP: canonical IPv4 returned by the probe must exactly equal expected_exit_ipv4
@@ -562,7 +577,7 @@ Grok password authentication is disabled in V1.
 
 OpenAI/Grok WebSocket must resolve and validate the final ProxyID against EgressRoute.ProxyID before dialing.
 
-The route-aware WebSocket dial path must not directly call url.Parse(proxyURL). It must use internal/pkg/proxyurl.Parse as the project fail-fast parser, then configure the project-approved proxy transport/dialer. This preserves socks5 to socks5h normalization and rejects invalid schemes consistently.
+Go 1.27 `net/http.Transport` supports both socks5 and socks5h Proxy URLs. The current WebSocket risk is not missing SOCKS5H support; it is that raw `url.Parse(proxyURL)` bypasses project `proxyurl.Parse` policy validation. The company dial path must be `proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`, preserving the project's fail-fast parser, canonical normalization and approved transport construction.
 
 ---
 
@@ -830,6 +845,14 @@ ufw reset
 
 because SSH/Nginx must not be destroyed.
 
+## V1 Threat Model: UID Boundary versus Account Geography
+
+A single Sub2API process/UID handles accounts assigned to multiple countries. Linux UID/nftables policy can enforce no host public direct, no unintended IPv6 and no direct DNS. It cannot see Account identity and therefore cannot independently enforce `US account -> only US SOCKS` or `SG account -> only SG SOCKS` when both local SOCKS endpoints are allowed to the same UID.
+
+Per-account geographic selection is an application invariant enforced by EgressRoute, immutable EgressDecision, route-aware HTTP/WS/OAuth/Refresh/Usage/Batch factories, CI/static guards and tests. The host guard is the origin-leak boundary, not the account-country selection engine.
+
+Kernel-level per-country/account isolation would require separate workers, UIDs and/or network namespaces. That is a V2 architecture and is outside V1.
+
 ---
 
 # 20. Required Security Tests
@@ -952,6 +975,17 @@ RouteHealthExpired
 ---
 
 # 21. Repository Maintenance Rules
+
+Static CI must reject new managed account-sensitive production use of:
+
+- `http.DefaultClient`
+- raw `url.Parse(proxyURL)`
+- an empty-ProxyURL client
+- direct `net.Dialer`
+- an unapproved resolver
+- an unapproved account outbound factory
+
+An exception is permitted only when explicitly recorded in the audited allowlist. CI is a regression guard; it does not replace code review, route-aware factories or host containment.
 
 Keep repository simple.
 
@@ -1152,14 +1186,18 @@ Do not introduce any direct fallback.
 
 The authoritative Phase 0.5 evidence record is `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Where an earlier planning statement conflicts with that evidence record, the evidence record controls until an explicit reviewed design decision updates this specification.
 
-Additional freeze requirements discovered at the fixed baseline:
+Final evidence resolutions at the fixed baseline:
 
-- Antigravity exists and performs account-sensitive outbound. Managed Antigravity is rejected until its V1 route class is explicitly approved.
+- Managed Antigravity is UNSUPPORTED and always FAIL CLOSED in V1. Future support requires a separate V2 route audit; V1 does not infer US or SG.
 - Gemini/Vertex batch providers and Vertex service-account token exchange are independent client paths and must receive EgressDecision; HTTPUpstream decoration cannot cover them.
 - UNIQUE route `proxy_id` is not enough: two Proxy rows can name one canonical internal endpoint. Managed `(protocol, canonical_host, port)` duplication must be rejected to prevent route/port cross-wiring.
-- RouteHealth must use exactly two independently operated, compile-time allowlisted HTTPS evidence services. The existing ProxyExitInfoProber remains an administrator diagnostic only.
-- CN-DIRECT, US-A and SG-A cannot become READY until their real fixed public IPv4 values are approved and verified.
+- RouteHealth evidence endpoints are locked to `https://api.ipify.org?format=json` and `https://cloudflare.com/cdn-cgi/trace` under the exact allowlist and validation rules in this specification. The existing ProxyExitInfoProber remains an administrator diagnostic only.
+- CN-DIRECT keeps route class CN_DIRECT and country CN. CN-DIRECT, US-A and SG-A require real fixed `expected_exit_ipv4` deployment values before they can become READY.
 
-The exact health-evidence endpoint operators, Antigravity route mapping and real exit IPv4 values are unresolved. The current design therefore remains:
+Architecture design and production activation are separate gates:
 
-`FINAL DESIGN VERDICT: DO NOT FREEZE`
+`FINAL DESIGN VERDICT: FREEZE`
+
+`PRODUCTION READINESS: NOT READY`
+
+Phase 1 development may begin after this document-only correction is accepted. Managed production traffic remains forbidden until the fixed exit IPv4 values are populated and the sing-box, DNS containment, IPv6 deny, nftables UID kill-switch and destructive leak tests all pass.

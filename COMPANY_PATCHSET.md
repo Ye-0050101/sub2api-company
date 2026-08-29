@@ -57,6 +57,8 @@ The EgressRoute table uses proxy_id as a UNIQUE foreign key to the existing Prox
 
 Route validation must require the referenced Proxy to be socks5h with a literal internal IP, no credentials, no fallback, no backup, no expiry, status=active and deleted_at=NULL. Ordinary Proxy update/delete is rejected while referenced, and route_key, route_class, country_code, proxy_id, expected_exit_ipv4, and required-country policy are immutable while the route is referenced.
 
+Locked `golang.org/x/net v0.56.0` sends both socks5 and socks5h schemes through the same SOCKS5 dialer and encodes hostname targets as FQDN SOCKS addresses. V1 still requires socks5h as canonical/future-proof remote-DNS intent and uniform parser/configuration policy, not because the locked dependency proves different DNS behavior for the two labels.
+
 Generated backend/cmd/server/wire_gen.go and Ent generated files may change only by running the project generators in Phase 1; they must not be hand-edited.
 
 ### Account-bound paths not covered by HTTPUpstream
@@ -110,12 +112,12 @@ The exact edit subset must be kept minimal during implementation: first centrali
 
 1. Add the model, repository, validation, and admin CRUD without changing request routing.
 2. Add a fail-closed EgressResolver keyed by account ID.
-3. Add company-owned runtime RouteHealth with startup preflight, 60-second periodic probes, a 120-second health TTL, immediate UNHEALTHY on probe failure/mismatch, and recovery only after a complete matching probe. Do not use the current ProxyExitInfoProber as the security authority: its defaults are plain HTTP, it accepts administrator-selected targets, it stops at the first success, and the ipify parser has no country. Use exactly two independently operated, compile-time allowlisted HTTPS evidence endpoints; require both to agree on one public IPv4 and require the country-bearing result to match route policy. Exact endpoint operators remain an approval blocker.
+3. Add company-owned runtime RouteHealth with startup preflight, 60-second periodic probes and a 120-second READY TTL. Compile-time Probe A is exactly `https://api.ipify.org?format=json` for IPv4 evidence; Probe B is exactly `https://cloudflare.com/cdn-cgi/trace` for IPv4 plus `loc`. Require exact HTTPS scheme/host/path/query, normal TLS, redirects disabled, bounded timeout/body and no administrator override or upstream-probe fallback. READY requires A.IP == B.IP == expected_exit_ipv4 and B.loc == route.country_code; every error, invalid address or mismatch is immediately UNHEALTHY.
 4. Decorate HTTPUpstream.Do and DoWithTLS. Resolve route.proxy_id, require account.proxy_id equality, validate active/non-deleted Proxy state and RouteHealth READY, then derive the effective URL. Missing, stale, unhealthy, inconsistent, or invalid routes return an error.
 5. Bind Claude/OpenAI/Grok/Gemini OAuth authorization sessions to egress_route_id plus final proxy_id, and reject callback overrides or drift. Use the same route for exchange and refresh.
 6. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, batch Gemini/Vertex operations, Vertex service-account token exchange, and WebSocket handshakes through route-aware factories. Claude usage without a TLS Profile still uses CompanyHTTPUpstream.
 7. Disable Grok password authentication in V1. Reject custom_base_url for managed accounts. In company production, allow_direct_on_error=true fails startup.
-8. Validate OpenAI/Grok WebSocket final ProxyID against EgressRoute.ProxyID. The dialer must use proxyurl.Parse plus the approved proxy transport/dialer; direct url.Parse(proxyURL) is prohibited.
+8. Validate OpenAI/Grok WebSocket final ProxyID against EgressRoute.ProxyID. Go 1.27 net/http supports socks5/socks5h Proxy URLs; the current defect is the raw parser policy bypass. The required chain is `proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`; direct `url.Parse(proxyURL)` is prohibited.
 9. Add the full fail-closed test set, including inactive/soft-deleted Proxy, duplicate route proxy_id, duplicate canonical route endpoint, raw WebSocket parser bypass, exit IP/country mismatch, expired/fingerprint-mismatched RouteHealth, batch-provider direct clients, and production direct-fallback startup failure.
 10. Activate in strict order: application tests, staging, sing-box routes, DNS containment, IPv6 deny, nftables UID kill-switch, destructive leak tests, then managed production traffic.
 
@@ -130,7 +132,7 @@ The exact edit subset must be kept minimal during implementation: first centrali
 - RouteHealthExpired -> FAIL CLOSED
 - DirectFallbackConfigTrue -> company production startup failure
 - DuplicateRouteEndpoint -> DB/service reject two managed Proxy rows that normalize to the same protocol/host/port
-- AntigravityRouteClassUnknown -> managed activation reject until policy explicitly assigns a route class
+- ManagedAntigravity -> UNSUPPORTED and FAIL CLOSED in V1; future support requires a separate V2 route audit
 - BatchProviderNoRoute -> Gemini/Vertex batch client creation fails closed instead of using an empty-proxy client or http.DefaultClient
 
 ## Compatibility and rollback
@@ -142,6 +144,8 @@ The exact edit subset must be kept minimal during implementation: first centrali
 - Production rollback deploys a previously approved company binary/version; it does not disable fail-closed enforcement at runtime.
 - Existing public APIs remain compatible by adding nullable fields; company policy validation may reject previously accepted unsafe configurations.
 - EgressRoute core fields and referenced Proxy records remain locked while referenced.
+- A single Sub2API UID cannot let nftables select US versus SG per account. Per-account geography is enforced by immutable EgressDecision and route-aware factories/tests; the host guard only prevents origin/direct/DNS/IPv6 escape. Kernel-level per-country isolation is a future separate-worker/UID/netns V2.
+- Managed platform selection is an explicit allowlist. Antigravity and every unlisted account type are UNSUPPORTED and FAIL CLOSED in V1.
 
 ## Explicit non-claims
 
@@ -153,8 +157,8 @@ This document does not claim that:
 - socks5h alone prevents every local lookup.
 - sing-box Guard, nftables, IPv6 deny, or database migrations are deployed.
 - the expected exit IP has been verified.
-- the exact two independent HTTPS health-evidence endpoints have been selected or approved.
-- Antigravity has an approved V1 route-class assignment.
+- the real fixed CN-DIRECT, US-A, or SG-A exit IPv4 values have been populated or verified.
+- managed Antigravity is supported; it is explicitly UNSUPPORTED in V1.
 - runtime RouteHealth exists or is READY.
 - route.enabled or dns_addr exists in V1.
 
@@ -162,13 +166,14 @@ Those properties require Phase 1 code, tests, and the separately controlled host
 
 ## Final evidence gate
 
-This planned surface is subordinate to `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Phase 1 must not begin from an assumption that the design is frozen. Before implementation approval, resolve:
+This planned surface is subordinate to `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. The architectural evidence gate is resolved by the locked probes and the explicit Antigravity exclusion.
 
-- Antigravity and other unlisted account-type route classes;
-- the exact two independent HTTPS RouteHealth evidence operators;
-- the approved fixed public IPv4 for CN-DIRECT, US-A and SG-A;
-- duplicate canonical managed Proxy endpoint prevention;
-- route-aware Gemini/Vertex batch and Vertex service-account token clients;
-- the separately reviewed host UID/DNS/IPv6 kill-switch plan.
+`FINAL DESIGN VERDICT: FREEZE`
 
-Current gate: `DO NOT FREEZE`.
+`PRODUCTION READINESS: NOT READY`
+
+Phase 1 development may begin after document review, but managed production traffic remains prohibited until fixed exit IP values, sing-box, DNS containment, IPv6 deny, nftables UID kill-switch and destructive leak tests pass.
+
+## Static CI audit gate
+
+Managed account-sensitive production code may not add `http.DefaultClient`, raw `url.Parse(proxyURL)`, empty-ProxyURL clients, direct `net.Dialer`, unapproved resolvers or unapproved account outbound factories unless the exact site is explicitly added to the audited allowlist.

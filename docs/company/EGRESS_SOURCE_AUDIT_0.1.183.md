@@ -6,6 +6,12 @@ Branch: company/egress-v1
 Scope: production source at this exact commit; upstream main was not used as an authority
 Change boundary: documentation only
 
+Verified commit metadata:
+
+- merge subject: `Merge pull request #6078 from YogaSakti/fix/responses-custom-tool-call-id`
+- body: `fix(openai): keep restored tool-call item IDs typed`
+- tree: `f08b15f70e98dd19ac3f22cd3ab9cd3957ccd69f`
+
 ## Executive finding
 
 The target architecture is implementable, but HTTPUpstream is not the only outbound path. At this baseline, an empty ProxyURL means direct access in HTTPUpstream, the shared HTTP client pool, req clients, OAuth clients, and WebSocket dialing. A CompanyHTTPUpstream decorator can cover most account-bound inference, model discovery, HTTP connectivity tests, and several quota paths, but cannot alone enforce OAuth, refresh, every usage path, OpenAI/Grok WebSocket, or non-account process traffic.
@@ -44,7 +50,7 @@ V1 design decision: EgressRoute references the existing Proxy table by proxy_id 
 - Managed custom base URL is stored in Account.Extra and consumed through Account.IsCustomBaseURLEnabled/GetCustomBaseURL by gateway_forward.go, gateway_upstream_request.go, and gateway_count_tokens.go. Managed-account create/update validation must reject both the enable flag and URL.
 - service.Proxy.URL() constructs a URL without checking Status; service.Proxy.IsActive() is separate. Route resolution must explicitly require status=active.
 - Proxy uses SoftDeleteMixin, whose query interceptor normally enforces deleted_at IS NULL. Route validation must preserve this invariant explicitly and fail if a deleted Proxy is visible through any alternate query path or stale cache.
-- repository.NewProxyExitInfoProber is not suitable as the RouteHealth security authority. Its built-ins are plain HTTP ip-api/ipify targets, configured targets can replace them, ProbeProxy returns the first success, and the ipify parser has no country. A company-owned dual-independent-HTTPS verifier is required; exact endpoint operators remain unapproved evidence.
+- repository.NewProxyExitInfoProber is not suitable as the RouteHealth security authority. Its built-ins are plain HTTP ip-api/ipify targets, configured targets can replace them, ProbeProxy returns the first success, and ipify has no country. Company evidence endpoints are instead compile-time locked to `https://api.ipify.org?format=json` and `https://cloudflare.com/cdn-cgi/trace` under the validation rules below.
 - service/openai_ws_client.go currently calls url.Parse(normalizedProxy) and installs http.ProxyURL directly. This bypasses the project's proxyurl.Parse fail-fast parsing and socks5-to-socks5h normalization.
 
 ## A. Current real network call graph
@@ -202,11 +208,11 @@ The process also connects to configured internal infrastructure such as PostgreS
 
 - Every direct net.Dialer or default http.Transport resolves target hostnames through the Go/OS resolver.
 - HTTP and HTTPS proxy transports may resolve the proxy endpoint locally.
-- SOCKS behavior depends on the parsed scheme and dialer. backend/internal/pkg/proxyurl/parse.go normalizes socks5 to socks5h, and proxyutil passes the hostname to the SOCKS dialer, which is the intended remote-resolution path.
-- The OpenAI/Grok WebSocket client parses proxy URLs independently and uses http.ProxyURL; it is not proven to share proxyurl.Parse normalization or the same remote-DNS guarantee.
+- Locked `golang.org/x/net v0.56.0` sends both socks5 and socks5h through the same SOCKS5 dialer. For a hostname, `internal/socks` emits an FQDN SOCKS address to the server. Current dependency evidence does not support “socks5 is necessarily local DNS, socks5h alone is remote DNS.” Company V1 retains socks5h as canonical/future-proof remote-DNS intent and uniform parser/configuration policy.
+- Go 1.27 net/http Transport supports socks5/socks5h Proxy URLs. The OpenAI/Grok WebSocket defect is the raw `url.Parse` policy-validation bypass, not missing SOCKS5H support. Required construction is `proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`.
 - Resolver calls used for SSRF validation intentionally resolve before connection, so even a later proxied request can cause a local DNS lookup.
 
-Conclusion: socks5h is necessary for account traffic but is not sufficient for process-wide DNS containment. nftables/namespace policy must restrict DNS to approved internal resolvers, and the application must avoid pre-resolving route-bound public hostnames.
+Conclusion: application no-pre-resolution plus Guard, the approved resolver and nftables provide DNS fail-closed. The socks5h label is canonical policy, not the final DNS boundary.
 
 ## E. Upstream files that can remain unchanged
 
@@ -304,6 +310,8 @@ Constraints:
 
 - International platforms Claude/OpenAI/Grok/Gemini may bind only INTERNATIONAL_PROXY.
 - DeepSeek/Kimi/Zhipu may bind only CN_DIRECT.
+- Managed Antigravity is UNSUPPORTED and must FAIL CLOSED in V1. No US/SG class is inferred; future support requires a separate V2 route audit.
+- Every account type outside the explicit managed V1 allowlist is UNSUPPORTED and FAIL CLOSED by default.
 - The referenced Proxy must use socks5h, a literal internal IP, no credentials, fallback_mode=none, backup_proxy_id=NULL, and expires_at=NULL.
 - The referenced Proxy must have status=active and deleted_at=NULL.
 - proxy_id is UNIQUE and route_key is UNIQUE.
@@ -313,7 +321,7 @@ Constraints:
 - Managed accounts cannot use custom_base_url.
 - Route version changes invalidate or reject in-flight OAuth sessions.
 
-Runtime RouteHealth is separate from the database model and has only READY/UNHEALTHY. Startup probes all referenced managed routes. Periodic probes run every 60 seconds, READY expires after 120 seconds without a successful verified probe, and any probe failure or IP/country mismatch immediately produces UNHEALTHY. EgressResolver returns only READY routes. CN_DIRECT has no implicit exception: it must verify the configured IPv4 and CountryCode CN.
+Runtime RouteHealth is separate from the database model and has only READY/UNHEALTHY. Probe A is exactly `https://api.ipify.org?format=json` for IPv4; Probe B is exactly `https://cloudflare.com/cdn-cgi/trace` for IPv4 and `loc`. Both are compile-time exact HTTPS scheme/host/path/query entries with normal TLS, redirects disabled, bounded timeout/body, no administrator override and no fallback to upstream HTTP probes. READY requires A.IP == B.IP == expected_exit_ipv4, B.loc == route.country_code, and canonical public IPv4. Every failure or mismatch is immediately UNHEALTHY. CN_DIRECT retains country CN; its deployment IPv4 must be populated before activation.
 
 ## I. Feasibility of CompanyHTTPUpstream
 
@@ -342,7 +350,7 @@ Caching route resolution is acceptable only with bounded TTL or versioned invali
 - OpenAI/Grok WebSocket and realtime handshakes, pools, reconnects, and realtime account tests.
 - The existing WebSocket proxy client directly uses url.Parse and http.ProxyURL; the company dial path must instead use proxyurl.Parse and the approved proxy transport/dialer.
 - Grok password login and captcha create/poll; the latter uses http.DefaultClient.
-- Antigravity and Vertex helper clients where they construct their own transport. Antigravity exists at this baseline, but the proposed V1 platform-to-route table does not assign it a route class; managed Antigravity therefore remains UNKNOWN and must be rejected until policy is approved.
+- Antigravity and Vertex helper clients where they construct their own transport. Managed Antigravity is explicitly UNSUPPORTED and FAIL CLOSED in V1; a future V2 audit is required before support.
 - Gemini and Vertex batch image providers, including Vertex GCS operations, because their default clients are created with an empty proxy and can fall back to http.DefaultClient.
 - Non-account login OAuth, payments, SMTP, release/pricing/Turnstile, web search, channel monitoring, moderation/security, and image fetch/storage traffic.
 - Explicit resolver/SSRF validation calls.
@@ -354,7 +362,7 @@ These paths require route-aware factories/dialers or host-level blocking. The wr
 
 1. Schema and migration: add EgressRoute with UNIQUE proxy_id FK and UNIQUE route_key plus nullable Account route fields; retain Account.proxy_id and enforce equality for managed accounts. Do not add proxy_url, enabled, or dns_addr.
 2. Route CRUD and validation: repository, service, admin handler/routes, minimal UI selector, protected Proxy update/delete, and route core-field immutability while referenced.
-3. Route health: introduce a company-owned verifier using exactly two independently operated, compile-time allowlisted HTTPS endpoints; require endpoint agreement, exact expected public IPv4 and country; expire health after 120 seconds; represent only READY/UNHEALTHY. The current ProxyExitInfoProber remains an administrative diagnostic, not security evidence.
+3. Route health: use compile-time Probe A `https://api.ipify.org?format=json` and Probe B `https://cloudflare.com/cdn-cgi/trace`; enforce exact URLs, normal TLS, no redirects/override/fallback, bounded resources and A.IP == B.IP == expected_exit_ipv4 with B.loc == country. The current ProxyExitInfoProber remains an administrative diagnostic only.
 4. Resolver: resolve by account ID, enforce platform class, ProxyID equality, active/not-deleted Proxy shape, no custom_base_url, and READY non-expired health.
 5. HTTP decorator: wrap Do and DoWithTLS and change the Wire provider. Leave the raw HTTPUpstream implementation unchanged.
 6. OAuth closure: bind Claude/OpenAI/Grok/Gemini authorization, exchange and refresh to the same route and ProxyID; remove callback route override. Disable Grok password auth.
@@ -370,7 +378,7 @@ No migration, business-code patch, generator run, deployment, or host change bel
 
 - HTTPUpstream request-host validation is configuration-dependent; when URL allowlisting/private-host blocking is disabled, custom base URLs may target internal networks. Egress routing does not replace SSRF validation.
 - Managed accounts forbid custom_base_url in V1; unmanaged compatibility paths still retain the upstream SSRF/destination-policy risk.
-- expected_exit_ipv4 is mandatory policy, but it is trustworthy only while a recent company-owned dual-HTTPS probe agrees on the exact public IPv4 and country. The endpoint pair is not yet approved, so this remains UNKNOWN.
+- expected_exit_ipv4 is mandatory policy and is trustworthy only while the locked dual-HTTPS evidence agrees on exact public IPv4 and country. Real CN/US/SG fixed values are production activation inputs, not unresolved architecture.
 - V1 intentionally stores no dns_addr; DNS containment is an external Guard/nftables responsibility.
 - Resolver-based SSRF checks can leak DNS before a proxied connection.
 - OAuth sessions currently store raw resolved ProxyURL, are not route-version bound, and allow callback override.
@@ -382,6 +390,7 @@ No migration, business-code patch, generator run, deployment, or host change bel
 - Go's OS resolver, IPv6 happy-eyeballs behavior, and direct fallback can escape application intent unless host controls deny them.
 - Internal infrastructure allowlists can themselves become broad bypasses if destination ports or identities are not constrained.
 - New upstream code may add another client after this audit; CI needs a guard for http.DefaultClient, direct http.Client, net.Dialer, tls.Dial, and resolver primitives.
+- Static CI must reject new managed account-sensitive `http.DefaultClient`, raw `url.Parse(proxyURL)`, empty-ProxyURL client, direct `net.Dialer`, unapproved resolver or unapproved account outbound factory unless explicitly audit-allowlisted.
 - Transport retries and proxy fallback must never fall back from a failed route to direct.
 - security.proxy_fallback.allow_direct_on_error must be forced false, and AnyTLS/HY2 fallback must remain inside sing-box.
 - Production cannot safely expose a runtime switch that disables company enforcement while continuing managed service; rollback must be version rollback.
@@ -389,6 +398,8 @@ No migration, business-code patch, generator run, deployment, or host change bel
 
 ## Audit conclusion
 
-At e8cb019, the specification's core data model and HTTPUpstream decoration are compatible with the source, but the security boundary must be broader than HTTPUpstream. Phase 1 should make route resolution the authority for every account-bound client family and use host controls as the final deny layer. Until that work and its tests are complete, no claim of leak-free egress is justified.
+At e8cb019, the specification's core data model and HTTPUpstream decoration are compatible with the source, but the security boundary must be broader than HTTPUpstream. Phase 1 makes route resolution the authority for account-bound client families and uses host controls as the final origin-leak deny layer.
 
-The exhaustive primitive inventory, batch-provider evidence, dependency behavior, fifteen final answers and freeze decision are recorded in `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Security-sensitive UNKNOWN items remain: Antigravity route classification, the dual-HTTPS evidence operators, the real fixed exit IPv4 values and tested host enforcement. Final design verdict: **DO NOT FREEZE**.
+With Antigravity explicitly unsupported and the evidence endpoints locked, the architecture gate is `FINAL DESIGN VERDICT: FREEZE`. The separate deployment gate is `PRODUCTION READINESS: NOT READY`: fixed exit IPv4 values, sing-box, DNS containment, IPv6 deny, nftables UID enforcement and destructive tests remain incomplete. No managed production traffic is permitted before those gates pass.
+
+Threat model: one Sub2API UID can be prevented by Linux from host public direct, unintended IPv6 and direct DNS, but the kernel cannot see Account identity and select US versus SG SOCKS per request. Account-country selection is enforced by EgressRoute, immutable EgressDecision, route-aware HTTP/WS/OAuth/Refresh/Usage/Batch factories, static CI and tests. Host policy is the origin-leak boundary. Separate worker/UID/netns country isolation is a future V2, not V1.
