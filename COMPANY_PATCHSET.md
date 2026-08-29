@@ -1,0 +1,118 @@
+# Sub2API Company Egress V1 — Planned Patch Surface
+
+Status: planned only
+Audited baseline: e8cb019fabf8b55199436229044cbf9aa7a82564
+Target tag context: production-base-0.1.183
+Implementation state: Phase 0.5 documentation only; none of the controls below is implemented by this file.
+
+## Scope rule
+
+Phase 1 must preserve upstream behavior except where an outbound request would otherwise violate an assigned EgressRoute. No server, firewall, sing-box, database, or production deployment change is part of this patch plan.
+
+## Planned new company-owned files
+
+- backend/ent/schema/egress_route.go
+- backend/internal/service/egress_route.go
+- backend/internal/repository/egress_route_repo.go
+- backend/internal/repository/company_egress_resolver.go
+- backend/internal/repository/company_http_upstream.go
+- backend/internal/handler/admin/egress_route_handler.go
+- backend/migrations/900000_company_egress_routes.up.sql
+- backend/migrations/900000_company_egress_routes.down.sql
+- frontend/src/views/admin/EgressRoutesView.vue
+- frontend/src/components/account/EgressRouteSelect.vue
+- frontend/src/api/admin/egress-routes.ts
+
+Migration files are names reserved for Phase 1. They are not generated or created in Phase 0.5.
+
+## Planned small upstream edits
+
+### Account persistence and API
+
+- backend/ent/schema/account.go — add nullable egress_route_id and denormalized egress_country; add route edge only if repository queries require it.
+- backend/internal/service/account.go — expose the two fields in the domain model.
+- backend/internal/service/account_service.go — extend generic create/update DTOs.
+- backend/internal/service/admin_service.go — extend admin input/output types.
+- backend/internal/service/admin_account.go — validate platform/route class, persist updates, clone and shadow-account propagation rules.
+- backend/internal/repository/account_repo.go — map, create, update, bulk-update, snapshot, and reload the new fields.
+- backend/internal/handler/admin/account_handler.go — request/response binding for create, edit, bulk edit, and clone.
+- frontend/src/api/admin/accounts.ts — account DTO fields.
+- frontend/src/components/account/CreateAccountModal.vue
+- frontend/src/components/account/EditAccountModal.vue
+- frontend/src/components/account/BulkEditAccountModal.vue
+- frontend/src/views/admin/AccountsView.vue
+
+### Route administration
+
+- backend/internal/server/routes/admin.go — register EgressRoute admin endpoints.
+- backend/internal/handler/wire.go — provide the handler.
+- backend/internal/service/wire.go — provide route service/resolver dependencies.
+- backend/internal/repository/wire.go — replace the raw HTTPUpstream provider with a decorated provider and provide route repository/resolver.
+- backend/cmd/server/wire.go — include providers where required.
+- frontend/src/router/index.ts — register the route-management page.
+
+Generated backend/cmd/server/wire_gen.go and Ent generated files may change only by running the project generators in Phase 1; they must not be hand-edited.
+
+### Account-bound paths not covered by HTTPUpstream
+
+- backend/internal/service/oauth_service.go
+- backend/internal/service/openai_oauth_service.go
+- backend/internal/service/grok_oauth_service.go
+- backend/internal/service/gemini_oauth_service.go
+- backend/internal/pkg/oauth/oauth.go
+- backend/internal/pkg/openai/oauth.go
+- backend/internal/pkg/xai/oauth.go
+- backend/internal/pkg/geminicli/oauth.go
+- backend/internal/repository/claude_oauth_service.go
+- backend/internal/repository/openai_oauth_service.go
+- backend/internal/repository/grok_oauth_client.go
+- backend/internal/repository/gemini_oauth_client.go
+- backend/internal/repository/req_client_pool.go
+- backend/internal/repository/claude_usage_service.go
+- backend/internal/service/account_usage_service.go
+- backend/internal/service/openai_quota_service.go
+- backend/internal/service/openai_agent_identity.go
+- backend/internal/service/openai_codex_pat_service.go
+- backend/internal/service/openai_codex_models_service.go
+- backend/internal/service/openai_ws_client.go
+- backend/internal/service/openai_ws_forwarder_ingress.go
+- backend/internal/service/openai_ws_forwarder_v2.go
+- backend/internal/service/openai_ws_pool.go
+- backend/internal/service/openai_ws_v2_passthrough_adapter.go
+- backend/internal/service/openai_live.go
+- backend/internal/service/account_test_service.go
+- backend/internal/pkg/geminicli/drive_client.go
+- backend/internal/service/gemini_oauth_service.go
+
+The exact edit subset must be kept minimal during implementation: first centralize route resolution and client construction, then change only callers that cannot pass through the wrapper.
+
+## Planned enforcement order
+
+1. Add the model, repository, validation, and admin CRUD without changing request routing.
+2. Add a fail-closed EgressResolver keyed by account ID.
+3. Decorate HTTPUpstream.Do and DoWithTLS. For account-bound calls, the resolved route overrides caller-supplied proxy_url. Missing, disabled, class-mismatched, or invalid routes return an error; they never become an empty proxy.
+4. Bind OAuth authorization sessions to egress_route_id plus a route fingerprint/version, and reject callback overrides or route drift.
+5. Route token exchange, refresh, usage/quota, model discovery, connectivity tests, and WebSocket handshakes through route-aware factories.
+6. Add explicit tests for empty route, disabled route, route-class mismatch, proxy parse failure, socks5-to-socks5h normalization, custom base URL, callback route drift, and WebSocket.
+7. Only after application tests pass, coordinate the separately reviewed sing-box Guard, nftables, IPv6 deny, and DNS-containment deployment.
+
+## Compatibility and rollback
+
+- Keep legacy proxy_id during the migration window; EgressRoute is authoritative only when the company feature switch is enabled.
+- Use a compile-time or startup configuration switch with a documented rollback path.
+- Do not silently translate a missing EgressRoute into legacy direct access.
+- Rollback must disable the company enforcement provider before dropping any schema fields.
+- Existing public APIs remain compatible by adding nullable fields; company policy validation may reject previously accepted unsafe configurations.
+
+## Explicit non-claims
+
+This document does not claim that:
+
+- Sub2API is currently unable to reach the public Internet directly.
+- OAuth, refresh, usage, tests, inference, or WebSocket are currently route-enforced.
+- DNS is currently contained.
+- socks5h alone prevents every local lookup.
+- sing-box Guard, nftables, IPv6 deny, or database migrations are deployed.
+- the expected exit IP has been verified.
+
+Those properties require Phase 1 code, tests, and the separately controlled host enforcement layers.
