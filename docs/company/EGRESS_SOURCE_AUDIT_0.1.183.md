@@ -42,6 +42,10 @@ V1 design decision: EgressRoute references the existing Proxy table by proxy_id 
 - The current code has no per-route DNS policy consumer; V1 therefore does not store dns_addr and leaves final DNS containment to Guard/nftables.
 - backend/internal/config/config.go defaults security.proxy_fallback.allow_direct_on_error to false but still accepts a true override. repository/wire.go passes it to the GitHub release and pricing clients, so V1 must reject/override true at configuration load rather than merely rely on the default.
 - Managed custom base URL is stored in Account.Extra and consumed through Account.IsCustomBaseURLEnabled/GetCustomBaseURL by gateway_forward.go, gateway_upstream_request.go, and gateway_count_tokens.go. Managed-account create/update validation must reject both the enable flag and URL.
+- service.Proxy.URL() constructs a URL without checking Status; service.Proxy.IsActive() is separate. Route resolution must explicitly require status=active.
+- Proxy uses SoftDeleteMixin, whose query interceptor normally enforces deleted_at IS NULL. Route validation must preserve this invariant explicitly and fail if a deleted Proxy is visible through any alternate query path or stale cache.
+- repository.NewProxyExitInfoProber already exposes ProxyExitInfoProber.ProbeProxy and returns exit IP, CountryCode and latency. It is reusable for route preflight/health, but a probe result without both IP and country cannot establish READY.
+- service/openai_ws_client.go currently calls url.Parse(normalizedProxy) and installs http.ProxyURL directly. This bypasses the project's proxyurl.Parse fail-fast parsing and socks5-to-socks5h normalization.
 
 ## A. Current real network call graph
 
@@ -279,11 +283,12 @@ Minimum route fields:
 | Field | Purpose |
 |---|---|
 | id | Stable route identity |
+| route_key | UNIQUE stable policy key |
 | name | Administrator-facing name |
 | route_class | INTERNATIONAL_PROXY or CN_DIRECT |
-| proxy_id | FK to an existing protected Proxy record |
+| proxy_id | UNIQUE FK to an existing protected Proxy record |
 | country_code | Intended country/region policy |
-| expected_exit_ipv4 | Optional verification target, not request-time enforcement |
+| expected_exit_ipv4 | Required expected exit; runtime health must verify exact IPv4 before READY |
 | version | OAuth session drift and cache invalidation |
 | created_at / updated_at | Auditability |
 
@@ -298,11 +303,15 @@ Constraints:
 - International platforms Claude/OpenAI/Grok/Gemini may bind only INTERNATIONAL_PROXY.
 - DeepSeek/Kimi/Zhipu may bind only CN_DIRECT.
 - The referenced Proxy must use socks5h, a literal internal IP, no credentials, fallback_mode=none, backup_proxy_id=NULL, and expires_at=NULL.
+- The referenced Proxy must have status=active and deleted_at=NULL.
+- proxy_id is UNIQUE and route_key is UNIQUE.
 - A Proxy referenced by an EgressRoute cannot be changed or deleted by ordinary Proxy administration.
 - EgressRoute core fields cannot be changed while any Account references the route.
 - V1 has no route.enabled and no dns_addr.
 - Managed accounts cannot use custom_base_url.
 - Route version changes invalidate or reject in-flight OAuth sessions.
+
+Runtime RouteHealth is separate from the database model and has only READY/UNHEALTHY. Startup probes all referenced managed routes. Periodic probes run every 60 seconds, READY expires after 120 seconds without a successful verified probe, and any probe failure or IP/country mismatch immediately produces UNHEALTHY. EgressResolver returns only READY routes. CN_DIRECT has no implicit exception: it must verify the configured IPv4 and CountryCode CN.
 
 ## I. Feasibility of CompanyHTTPUpstream
 
@@ -310,11 +319,12 @@ Feasible and high-value. Both Do and DoWithTLS already receive accountID, and mo
 
 1. Resolve Account.egress_route_id by accountID.
 2. Load the route, validate platform class, and obtain route.proxy_id.
-3. Require Account.proxy_id == EgressRoute.proxy_id, load the Proxy, and validate socks5h/literal-internal-IP/no-credentials/no-fallback/no-backup/no-expiry.
+3. Require Account.proxy_id == EgressRoute.proxy_id, load the Proxy, and validate socks5h/literal-internal-IP/no-credentials/no-fallback/no-backup/no-expiry/status-active/not-deleted.
 4. Derive the effective proxy URL from the validated Proxy record.
-5. Ignore the caller's legacy ProxyURL for company-enforced accounts.
-6. Delegate to the unchanged HTTPUpstream implementation.
-7. Fail closed on accountID zero, missing route, ProxyID mismatch, parse failure, or class mismatch according to an explicit call-site policy.
+5. Require a non-expired READY RouteHealth record whose measured IPv4 and CountryCode match route policy.
+6. Ignore the caller's legacy ProxyURL for company-enforced accounts.
+7. Delegate to the unchanged HTTPUpstream implementation.
+8. Fail closed on accountID zero, missing route, ProxyID mismatch, unhealthy/stale health, parse failure, or class mismatch.
 
 The provider graph must expose the decorated implementation as service.HTTPUpstream while retaining the raw implementation as an internal concrete dependency. A distinct provider function or concrete type is needed to avoid two providers for the same interface.
 
@@ -328,6 +338,7 @@ Caching route resolution is acceptable only with bounded TTL or versioned invali
 - OpenAI quota/privacy clients and Codex account-usage probes.
 - Gemini Drive, project discovery, tier and resource helpers.
 - OpenAI/Grok WebSocket and realtime handshakes, pools, reconnects, and realtime account tests.
+- The existing WebSocket proxy client directly uses url.Parse and http.ProxyURL; the company dial path must instead use proxyurl.Parse and the approved proxy transport/dialer.
 - Grok password login and captcha create/poll; the latter uses http.DefaultClient.
 - Antigravity and Vertex helper clients where they construct their own transport.
 - Non-account login OAuth, payments, SMTP, release/pricing/Turnstile, web search, channel monitoring, moderation/security, and image fetch/storage traffic.
@@ -338,16 +349,17 @@ These paths require route-aware factories/dialers or host-level blocking. The wr
 
 ## K. Phase 1 minimum patch set
 
-1. Schema and migration: add EgressRoute with proxy_id FK plus nullable Account route fields; retain Account.proxy_id and enforce equality for managed accounts. Do not add proxy_url, enabled, or dns_addr.
+1. Schema and migration: add EgressRoute with UNIQUE proxy_id FK and UNIQUE route_key plus nullable Account route fields; retain Account.proxy_id and enforce equality for managed accounts. Do not add proxy_url, enabled, or dns_addr.
 2. Route CRUD and validation: repository, service, admin handler/routes, minimal UI selector, protected Proxy update/delete, and route core-field immutability while referenced.
-3. Resolver: resolve by account ID, enforce platform class, ProxyID equality, Proxy shape, no custom_base_url, and fail-closed semantics.
-4. HTTP decorator: wrap Do and DoWithTLS and change the Wire provider. Leave the raw HTTPUpstream implementation unchanged.
-5. OAuth closure: bind Claude/OpenAI/Grok/Gemini authorization, exchange and refresh to the same route and ProxyID; remove callback route override. Disable Grok password auth.
-6. Usage/test closure: force Claude usage through CompanyHTTPUpstream even without a TLS Profile; route OpenAI quota/Codex probes, Gemini helpers, and account realtime tests through route-aware clients.
-7. WebSocket closure: validate final ProxyID against EgressRoute and require the route-aware dialer for OpenAI/Grok realtime, reconnect, pool, and tests.
-8. Fallback closure: force security.proxy_fallback.allow_direct_on_error=false; keep AnyTLS/HY2 failover only inside sing-box.
-9. Verification: prove missing/mismatched routes, invalid Proxy shape, protected mutation, custom base URL, OAuth drift and WebSocket drift fail before any dial.
-10. Operational gate: nftables/Guard deny the Sub2API UID arbitrary public IPv4, public IPv6 and direct DNS; only approved internal resources and route endpoints are allowed.
+3. Route health: use ProxyExitInfoProber for startup and 60-second periodic probes; require exact expected IPv4/country; expire health after 120 seconds; represent only READY/UNHEALTHY.
+4. Resolver: resolve by account ID, enforce platform class, ProxyID equality, active/not-deleted Proxy shape, no custom_base_url, and READY non-expired health.
+5. HTTP decorator: wrap Do and DoWithTLS and change the Wire provider. Leave the raw HTTPUpstream implementation unchanged.
+6. OAuth closure: bind Claude/OpenAI/Grok/Gemini authorization, exchange and refresh to the same route and ProxyID; remove callback route override. Disable Grok password auth.
+7. Usage/test closure: force Claude usage through CompanyHTTPUpstream even without a TLS Profile; route OpenAI quota/Codex probes, Gemini helpers, and account realtime tests through route-aware clients.
+8. WebSocket closure: validate final ProxyID and use proxyurl.Parse plus the approved proxy transport/dialer for OpenAI/Grok realtime, reconnect, pool, and tests.
+9. Startup/fallback closure: company production fails startup if allow_direct_on_error=true or enforcement is disabled; AnyTLS/HY2 failover remains inside sing-box.
+10. Verification: add ProxyInactive, ProxySoftDeleted, DuplicateRouteProxyID, WebSocketRawProxyParserBypass, ExitIPv4Mismatch, ExitCountryMismatch, RouteHealthExpired, DirectFallbackConfigTrue, route-drift and no-direct tests.
+11. Operational gate: application/tests -> staging -> sing-box routes -> DNS containment -> IPv6 deny -> nftables UID kill-switch -> destructive leak tests -> managed production traffic.
 
 No migration, business-code patch, generator run, deployment, or host change belongs to Phase 0.5.
 
@@ -355,19 +367,21 @@ No migration, business-code patch, generator run, deployment, or host change bel
 
 - HTTPUpstream request-host validation is configuration-dependent; when URL allowlisting/private-host blocking is disabled, custom base URLs may target internal networks. Egress routing does not replace SSRF validation.
 - Managed accounts forbid custom_base_url in V1; unmanaged compatibility paths still retain the upstream SSRF/destination-policy risk.
-- expected_exit_ipv4 is only data until a probe verifies it; per-request exit identity cannot be inferred from configuration alone.
+- expected_exit_ipv4 is mandatory policy, but it is trustworthy only while a recent ProxyExitInfoProber result exactly matches it and route CountryCode.
 - V1 intentionally stores no dns_addr; DNS containment is an external Guard/nftables responsibility.
 - Resolver-based SSRF checks can leak DNS before a proxied connection.
 - OAuth sessions currently store raw resolved ProxyURL, are not route-version bound, and allow callback override.
 - Legacy ProxyID, proxy fallback chains, and shadow-account propagation can diverge from the new route unless migration rules are explicit.
 - accountID zero is used by generic/non-account traffic; a global fail-closed choice could break system functions, while allowing it preserves a bypass. Each such caller needs classification.
 - SOCKS5h behavior is not uniformly shared by WebSocket and every third-party library.
+- The upstream WebSocket path's raw url.Parse is an identified parser bypass until replaced by the route-aware dialer.
 - Environment-provided HTTP proxy behavior and library defaults need tests; a wrapper should set transports explicitly.
 - Go's OS resolver, IPv6 happy-eyeballs behavior, and direct fallback can escape application intent unless host controls deny them.
 - Internal infrastructure allowlists can themselves become broad bypasses if destination ports or identities are not constrained.
 - New upstream code may add another client after this audit; CI needs a guard for http.DefaultClient, direct http.Client, net.Dialer, tls.Dial, and resolver primitives.
 - Transport retries and proxy fallback must never fall back from a failed route to direct.
 - security.proxy_fallback.allow_direct_on_error must be forced false, and AnyTLS/HY2 fallback must remain inside sing-box.
+- Production cannot safely expose a runtime switch that disables company enforcement while continuing managed service; rollback must be version rollback.
 - Logs, metrics, and admin APIs must redact credentials embedded in proxy URLs.
 
 ## Audit conclusion

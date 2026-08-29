@@ -138,7 +138,7 @@ These are mandatory.
 
 8. Managed Account.ProxyID must equal EgressRoute.ProxyID.
 
-9. A route Proxy must be socks5h, use a literal internal IP, contain no credentials, use fallback_mode=none, have backup_proxy_id=NULL and expires_at=NULL.
+9. A route Proxy must be socks5h, use a literal internal IP, contain no credentials, use fallback_mode=none, have backup_proxy_id=NULL, expires_at=NULL, status=active and deleted_at=NULL.
 
 10. A Proxy referenced by an EgressRoute cannot be modified or deleted through ordinary Proxy administration.
 
@@ -281,7 +281,16 @@ EgressRoute does not duplicate ProxyURL. The runtime URL is resolved through the
 
 The referenced Proxy must use socks5h with a literal internal IP and no credentials. It must have fallback_mode=none, backup_proxy_id=NULL and expires_at=NULL.
 
+It must also have status=active and deleted_at=NULL. service.Proxy.URL() does not check Status; IsActive() is separate logic, so URL construction is never proof that a Proxy is usable.
+
 V1 does not add route.enabled or dns_addr.
+
+Database constraints:
+
+- route_key is UNIQUE
+- proxy_id is UNIQUE and a foreign key to proxies.id
+
+One managed Proxy can belong to only one EgressRoute. This prevents the same internal endpoint from being labeled with conflicting country or route-class policy.
 
 A referenced route's core fields — route_key, route_class, country_code, proxy_id and required-country policy — are immutable until every account reference is removed.
 
@@ -418,13 +427,44 @@ Resolver checks:
 - account ProxyID equals route ProxyID
 - referenced Proxy exists
 - referenced Proxy satisfies the socks5h/literal-internal-IP/no-credentials/no-fallback/no-expiry rules
+- referenced Proxy status is active and deleted_at is NULL
 - managed account has no custom_base_url
-- security.proxy_fallback.allow_direct_on_error is false
+- runtime RouteHealth is READY and not expired
 
 No valid result:
 return error
 
 Never return empty proxy as a normal successful decision.
+
+security.proxy_fallback.allow_direct_on_error is a production startup invariant, not a per-request hot-path check. If it is true in company production mode, the process must FAIL STARTUP.
+
+## Runtime RouteHealth
+
+V1 has no database route.enabled field. Availability is represented separately by runtime RouteHealth:
+
+READY
+
+UNHEALTHY
+
+EgressResolver may return EgressDecision only when the route is READY and its health record is within TTL.
+
+V1 health rules:
+
+- startup preflight: synchronously probe every EgressRoute referenced by a managed account before managed traffic is admitted
+- production startup/activation: if any referenced managed route is not READY, managed service activation fails closed
+- periodic probe interval: 60 seconds
+- health TTL: 120 seconds from the last successful verified probe
+- probe timeout: use the existing ProxyExitInfoProber timeout policy
+- probe transport: derive the URL from the validated route Proxy and use the existing ProxyExitInfoProber capability
+- probe failure: immediately mark UNHEALTHY; do not retain READY until TTL
+- stale/expired health: treat as UNHEALTHY and fail closed
+- exit IP: canonical IPv4 returned by the probe must exactly equal expected_exit_ipv4
+- exit country: normalized CountryCode must exactly equal route.country_code
+- missing IP or CountryCode: cannot become READY
+- mismatch: mark UNHEALTHY and fail managed requests closed
+- recovery: only a later complete matching probe may return the route to READY
+
+CN_DIRECT has no implicit exception in V1: its verified CountryCode must be CN and its actual exit IPv4 must equal expected_exit_ipv4. Any future exception requires an explicit, documented policy revision.
 
 ---
 
@@ -521,6 +561,8 @@ Grok password authentication is disabled in V1.
 
 OpenAI/Grok WebSocket must resolve and validate the final ProxyID against EgressRoute.ProxyID before dialing.
 
+The route-aware WebSocket dial path must not directly call url.Parse(proxyURL). It must use internal/pkg/proxyurl.Parse as the project fail-fast parser, then configure the project-approved proxy transport/dialer. This preserves socks5 to socks5h normalization and rejects invalid schemes consistently.
+
 ---
 
 # 12. Legacy Proxy
@@ -552,6 +594,8 @@ For managed accounts:
 
 AnyTLS/HY2 primary/backup behavior remains entirely inside sing-box.
 
+In company production mode, allow_direct_on_error=true causes startup failure. EgressResolver does not repeat this configuration check on every request.
+
 Proxy administration must reject ordinary update/delete operations when the Proxy is referenced by an EgressRoute.
 
 ---
@@ -570,7 +614,7 @@ Do NOT initially make egress_route_id NOT NULL because existing production accou
 
 Strict application logic determines schedulability / request rejection.
 
-The new egress_routes table stores proxy_id as an FK to the existing proxies table. It does not store proxy_url, enabled or dns_addr.
+The new egress_routes table stores proxy_id as a UNIQUE FK to the existing proxies table and route_key is UNIQUE. It does not store proxy_url, enabled or dns_addr.
 
 Applied migrations are immutable.
 
@@ -880,8 +924,29 @@ OpenAIWebSocketProxyIDMismatch
 ClaudeUsageWithoutTLSProfile
 → still routed through CompanyHTTPUpstream
 
-DirectFallbackSetting
-→ forced false
+DirectFallbackConfigTrue
+→ production startup failure when true
+
+ProxyInactive
+→ FAIL CLOSED
+
+ProxySoftDeleted
+→ FAIL CLOSED
+
+DuplicateRouteProxyID
+→ DB/service reject
+
+WebSocketRawProxyParserBypass
+→ prohibited; route-aware dialer test requires proxyurl.Parse and approved transport
+
+ExitIPv4Mismatch
+→ route UNHEALTHY + FAIL CLOSED
+
+ExitCountryMismatch
+→ route UNHEALTHY + FAIL CLOSED
+
+RouteHealthExpired
+→ FAIL CLOSED
 
 ---
 
@@ -980,6 +1045,30 @@ Keep modifications to upstream core small and obvious.
 
 # 24. Development Order
 
+Production enforcement cannot be disabled by an ordinary runtime switch while the service continues handling managed traffic. Feature switches are permitted only in development and tests.
+
+Production rollback means deploying the previously approved company binary/version. It must not mean disabling fail-closed enforcement in the current binary. A rollback target that cannot enforce these invariants must not serve managed accounts.
+
+Production activation order is mandatory:
+
+application code/tests
+↓
+staging
+↓
+sing-box routes
+↓
+DNS containment
+↓
+IPv6 deny
+↓
+nftables Sub2API UID kill-switch
+↓
+destructive leak tests
+↓
+enable managed accounts for production traffic
+
+Managed accounts must not carry production traffic before the kernel guard, DNS containment and destructive leak tests are complete.
+
 Phase 0:
 freeze exact upstream production baseline
 
@@ -1005,7 +1094,7 @@ Phase 7:
 route class platform policy
 
 Phase 8:
-Proxy/route immutability, no-custom-base-URL and fail-closed tests
+RouteHealth preflight/periodic probes, Proxy/route immutability, no-custom-base-URL and fail-closed tests
 
 Phase 9:
 build company binary
@@ -1014,16 +1103,22 @@ Phase 10:
 staging deployment
 
 Phase 11:
-sing-box US/SG/CN/Guard
+sing-box routes
 
 Phase 12:
-DNS/nftables/IPv6 fail-closed
+DNS containment
 
 Phase 13:
-destructive security testing
+IPv6 deny
 
 Phase 14:
-production
+nftables Sub2API UID kill-switch
+
+Phase 15:
+destructive security testing
+
+Phase 16:
+enable managed accounts for production traffic
 
 ---
 
