@@ -156,12 +156,12 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 			}
 			return *proxyID
 		}(),
-		ProxyURL:     proxyURL,
-		RedirectURI:  redirectURI,
-		ProjectID:    strings.TrimSpace(projectID),
-		TierID:       canonicalGeminiTierIDForOAuthType(oauthType, tierID),
-		OAuthType:    oauthType,
-		CreatedAt:    time.Now(),
+		ProxyURL:    proxyURL,
+		RedirectURI: redirectURI,
+		ProjectID:   strings.TrimSpace(projectID),
+		TierID:      canonicalGeminiTierIDForOAuthType(oauthType, tierID),
+		OAuthType:   oauthType,
+		CreatedAt:   time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
