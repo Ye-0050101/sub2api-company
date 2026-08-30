@@ -757,7 +757,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
-		ProxyURL: managedProxyURL,
+		ProxyURL:     managedProxyURL,
 		ForceNewConn: false,
 	}
 	pool := s.getOpenAIWSConnPool()
