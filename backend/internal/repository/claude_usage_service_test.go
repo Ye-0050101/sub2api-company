@@ -7,9 +7,24 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+type claudeUsageTestUpstream struct{}
+
+func (claudeUsageTestUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+	if _, _, err := proxyurl.Parse(proxyURL); err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
+
+func (u claudeUsageTestUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
 
 type ClaudeUsageServiceSuite struct {
 	suite.Suite
@@ -48,6 +63,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_Success() {
 	s.fetcher = &claudeUsageService{
 		usageURL:          s.srv.URL,
 		allowPrivateHosts: true,
+		httpUpstream:      claudeUsageTestUpstream{},
 	}
 
 	resp, err := s.fetcher.FetchUsage(context.Background(), "at", "")
@@ -70,6 +86,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_NonOK() {
 	s.fetcher = &claudeUsageService{
 		usageURL:          s.srv.URL,
 		allowPrivateHosts: true,
+		httpUpstream:      claudeUsageTestUpstream{},
 	}
 
 	_, err := s.fetcher.FetchUsage(context.Background(), "at", "")
@@ -87,6 +104,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_BadJSON() {
 	s.fetcher = &claudeUsageService{
 		usageURL:          s.srv.URL,
 		allowPrivateHosts: true,
+		httpUpstream:      claudeUsageTestUpstream{},
 	}
 
 	_, err := s.fetcher.FetchUsage(context.Background(), "at", "")
@@ -103,6 +121,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_ContextCancel() {
 	s.fetcher = &claudeUsageService{
 		usageURL:          s.srv.URL,
 		allowPrivateHosts: true,
+		httpUpstream:      claudeUsageTestUpstream{},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,6 +135,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_InvalidProxyReturnsError() {
 	s.fetcher = &claudeUsageService{
 		usageURL:          "http://example.com",
 		allowPrivateHosts: true,
+		httpUpstream:      claudeUsageTestUpstream{},
 	}
 
 	_, err := s.fetcher.FetchUsage(context.Background(), "at", "://bad-proxy-url")

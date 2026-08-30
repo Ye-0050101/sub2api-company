@@ -25,6 +25,7 @@ type OAuthConfig struct {
 type OAuthSession struct {
 	State        string `json:"state"`
 	CodeVerifier string `json:"code_verifier"`
+	ProxyID      int64  `json:"proxy_id,omitempty"`
 	ProxyURL     string `json:"proxy_url,omitempty"`
 	RedirectURI  string `json:"redirect_uri"`
 	ProjectID    string `json:"project_id,omitempty"`

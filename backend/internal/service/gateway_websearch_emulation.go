@@ -52,6 +52,12 @@ func getWebSearchManager() *websearch.Manager {
 // Judgment chain: manager exists → only web_search tool → global enabled → account/channel enabled.
 // Account-level mode: "enabled" (force on), "disabled" (force off), "default" (follow channel).
 func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, groupID *int64, body []byte) bool {
+	// Company V1 permits only the audited provider endpoints. The optional
+	// third-party Brave/Tavily emulation client is outside that allowlist, so
+	// leave the request on the selected AI provider's native tool path.
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		return false
+	}
 	if getWebSearchManager() == nil {
 		return false
 	}

@@ -195,6 +195,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 
+	managedProxyURL, proxyErr := resolveCompanyWebSocketProxy(acquireCtx, s.cfg, s.managedProxyResolver, account, wsURL)
+	if proxyErr != nil {
+		return nil, fmt.Errorf("resolve managed websocket proxy: %w", proxyErr)
+	}
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   wsURL,
@@ -204,12 +208,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		},
 		PreferredConnID: preferredConnID,
 		ForceNewConn:    forceNewConn,
-		ProxyURL: func() string {
-			if account.ProxyID != nil && account.Proxy != nil {
-				return account.Proxy.URL()
-			}
-			return ""
-		}(),
+		ProxyURL:        managedProxyURL,
 	})
 	if err != nil {
 		var agentDialErr *openAIWSDialError

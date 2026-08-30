@@ -788,6 +788,7 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	managedProxyResolver  ManagedProxyResolver
 }
 
 // NewGatewayService creates a new GatewayService
@@ -867,6 +868,9 @@ func NewGatewayService(
 	)
 	svc.debugModelRouting.Store(parseDebugEnvBool(os.Getenv("SUB2API_DEBUG_MODEL_ROUTING")))
 	svc.debugClaudeMimic.Store(parseDebugEnvBool(os.Getenv("SUB2API_DEBUG_CLAUDE_MIMIC")))
+	if provider, ok := httpUpstream.(ManagedProxyResolverProvider); ok {
+		svc.managedProxyResolver = provider.ManagedProxyResolver()
+	}
 	if path := strings.TrimSpace(os.Getenv(debugGatewayBodyEnv)); path != "" {
 		svc.initDebugGatewayBodyFile(path)
 	}

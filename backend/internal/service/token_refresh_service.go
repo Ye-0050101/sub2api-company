@@ -69,6 +69,7 @@ type TokenRefreshService struct {
 	// OpenAI privacy: 刷新成功后检查并设置 training opt-out
 	privacyClientFactory PrivacyClientFactory
 	proxyRepo            ProxyRepository
+	managedProxyResolver ManagedProxyResolver
 
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -1456,8 +1457,18 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		return
 	}
 
-	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
+	proxyURL := ""
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			slog.Warn("token_refresh.openai_privacy_egress_rejected",
+				"account_id", account.ID,
+				"error", err,
+			)
+			return
+		}
+		proxyURL = decision.ProxyURL
+	} else if account.ProxyID != nil && s.proxyRepo != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
 			proxyURL = p.URL()
 		}

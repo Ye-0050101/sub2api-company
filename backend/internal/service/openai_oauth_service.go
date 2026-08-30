@@ -18,6 +18,11 @@ type OpenAIOAuthService struct {
 	proxyRepo            ProxyRepository
 	oauthClient          OpenAIOAuthClient
 	privacyClientFactory PrivacyClientFactory // 用于调用 chatgpt.com/backend-api（ImpersonateChrome）
+	managedProxyResolver ManagedProxyResolver
+}
+
+func (s *OpenAIOAuthService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
 }
 
 // NewOpenAIOAuthService creates a new OpenAI OAuth service
@@ -62,9 +67,14 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_OAUTH_SESSION_FAILED", "failed to generate session ID: %v", err)
 	}
 
-	// Get proxy URL if specified
 	var proxyURL string
-	if proxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformOpenAI, AccountTypeOAuth)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if proxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 		if err != nil {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
@@ -86,6 +96,12 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		State:        state,
 		CodeVerifier: codeVerifier,
 		ClientID:     clientID,
+		ProxyID: func() int64 {
+			if proxyID == nil {
+				return 0
+			}
+			return *proxyID
+		}(),
 		RedirectURI:  redirectURI,
 		ProxyURL:     proxyURL,
 		CreatedAt:    time.Now(),
@@ -143,9 +159,18 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_STATE", "invalid oauth state")
 	}
 
-	// Get proxy URL: prefer input.ProxyID, fallback to session.ProxyURL
 	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformOpenAI, AccountTypeOAuth)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if input.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
 		if err != nil {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
@@ -345,7 +370,13 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	}
 
 	var proxyURL string
-	if account.ProxyID != nil && s.proxyRepo != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if account.ProxyID != nil && s.proxyRepo != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()

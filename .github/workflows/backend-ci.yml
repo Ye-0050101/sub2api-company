@@ -34,6 +34,8 @@ jobs:
       - name: Verify Go version
         run: |
           go version | grep -q 'go1.27.0'
+      - name: Company egress static guard
+        run: python3 tools/check_company_egress_guard.py
       - name: Unit tests
         working-directory: backend
         run: make test-unit

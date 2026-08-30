@@ -104,6 +104,25 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	CompanyEgress           CompanyEgressConfig           `mapstructure:"company_egress"`
+}
+
+// CompanyEgressConfig is the deployment-owned policy for deterministic
+// account egress. It deliberately keys policy by the existing Proxy ID so the
+// company fork does not need a second route table or a database migration.
+//
+// DevelopmentBypass exists only for local debug/test processes. A release
+// process rejects it during configuration validation.
+type CompanyEgressConfig struct {
+	DevelopmentBypass bool                         `mapstructure:"development_bypass"`
+	ManagedProxies    []CompanyManagedProxyConfig `mapstructure:"managed_proxies"`
+}
+
+type CompanyManagedProxyConfig struct {
+	ProxyID          int64  `mapstructure:"proxy_id"`
+	Class            string `mapstructure:"class"`
+	CountryCode      string `mapstructure:"country_code"`
+	ExpectedExitIPv4 string `mapstructure:"expected_exit_ipv4"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2065,6 +2084,7 @@ func setDefaults() {
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
+	viper.SetDefault("company_egress.development_bypass", false)
 
 	// Billing
 	viper.SetDefault("billing.circuit_breaker.enabled", true)
@@ -2641,6 +2661,12 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if strings.EqualFold(strings.TrimSpace(c.Server.Mode), "release") && c.CompanyEgress.DevelopmentBypass {
+		return fmt.Errorf("company_egress.development_bypass is forbidden in release mode")
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Server.Mode), "release") && c.Security.ProxyFallback.AllowDirectOnError {
+		return fmt.Errorf("security.proxy_fallback.allow_direct_on_error must be false in release mode")
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

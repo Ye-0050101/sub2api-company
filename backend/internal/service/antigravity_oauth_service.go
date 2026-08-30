@@ -11,8 +11,9 @@ import (
 )
 
 type AntigravityOAuthService struct {
-	sessionStore *antigravity.SessionStore
-	proxyRepo    ProxyRepository
+	sessionStore         *antigravity.SessionStore
+	proxyRepo            ProxyRepository
+	managedProxyResolver ManagedProxyResolver
 }
 
 func NewAntigravityOAuthService(proxyRepo ProxyRepository) *AntigravityOAuthService {
@@ -20,6 +21,17 @@ func NewAntigravityOAuthService(proxyRepo ProxyRepository) *AntigravityOAuthServ
 		sessionStore: antigravity.NewSessionStore(),
 		proxyRepo:    proxyRepo,
 	}
+}
+
+func (s *AntigravityOAuthService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
+}
+
+func (s *AntigravityOAuthService) rejectCompanyManagedAntigravity() error {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		return fmt.Errorf("%w: Antigravity is unsupported in Company Egress V1", ErrManagedEgressUnsupported)
+	}
+	return nil
 }
 
 // AntigravityAuthURLResult is the result of generating an authorization URL
@@ -31,6 +43,9 @@ type AntigravityAuthURLResult struct {
 
 // GenerateAuthURL 生成 Google OAuth 授权链接
 func (s *AntigravityOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64) (*AntigravityAuthURLResult, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return nil, err
+	}
 	state, err := antigravity.GenerateState()
 	if err != nil {
 		return nil, fmt.Errorf("生成 state 失败: %w", err)
@@ -96,6 +111,9 @@ type AntigravityTokenInfo struct {
 
 // ExchangeCode 用 authorization code 交换 token
 func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *AntigravityExchangeCodeInput) (*AntigravityTokenInfo, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return nil, err
+	}
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
 		return nil, fmt.Errorf("session 不存在或已过期")
@@ -168,6 +186,9 @@ func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *Antig
 
 // RefreshToken 刷新 token
 func (s *AntigravityOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*AntigravityTokenInfo, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return nil, err
+	}
 	var lastErr error
 
 	for attempt := 0; attempt <= 3; attempt++ {
@@ -213,6 +234,9 @@ func (s *AntigravityOAuthService) RefreshToken(ctx context.Context, refreshToken
 
 // ValidateRefreshToken 用 refresh token 验证并获取完整的 token 信息（含 email 和 project_id）
 func (s *AntigravityOAuthService) ValidateRefreshToken(ctx context.Context, refreshToken string, proxyID *int64) (*AntigravityTokenInfo, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return nil, err
+	}
 	var proxyURL string
 	if proxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
@@ -276,6 +300,9 @@ func isNonRetryableAntigravityOAuthError(err error) bool {
 
 // RefreshAccountToken 刷新账户的 token
 func (s *AntigravityOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*AntigravityTokenInfo, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return nil, err
+	}
 	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
 		return nil, fmt.Errorf("非 Antigravity OAuth 账户")
 	}
@@ -441,6 +468,9 @@ func resolveDefaultTierID(loadRaw map[string]any) string {
 
 // FillProjectID 仅获取 project_id，不刷新 OAuth token
 func (s *AntigravityOAuthService) FillProjectID(ctx context.Context, account *Account, accessToken string) (string, error) {
+	if err := s.rejectCompanyManagedAntigravity(); err != nil {
+		return "", err
+	}
 	var proxyURL string
 	if account.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)

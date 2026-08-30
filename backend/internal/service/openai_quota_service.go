@@ -119,8 +119,13 @@ type OpenAIQuotaService struct {
 	proxyRepo            ProxyRepository
 	tokenProvider        *OpenAITokenProvider
 	privacyClientFactory PrivacyClientFactory
+	managedProxyResolver ManagedProxyResolver
 	agentIdentityTaskMu  sync.Mutex
 	agentIdentityWS      agentIdentityWSConnectionInvalidator
+}
+
+func (s *OpenAIQuotaService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
 }
 
 // NewOpenAIQuotaService constructs a quota service. token provider is required —
@@ -401,6 +406,14 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 		return "", "", "", false, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_INVALID_TYPE", "account is not an OAuth account")
 	}
 
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, resolveErr := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if resolveErr != nil {
+			return "", "", "", false, resolveErr
+		}
+		proxyURL = decision.ProxyURL
+	}
+
 	// Spark shadow accounts do not hold their own credentials; resolve to the
 	// parent account so that chatgpt_account_id / access_token / proxy all come
 	// from the parent. This must happen BEFORE the chatgpt_account_id check.
@@ -440,7 +453,7 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	// instead of round-tripping the DB again. Fall back to proxyRepo only
 	// when Proxy isn't pre-populated (defensive — e.g. callers that built
 	// the Account by hand).
-	if account.ProxyID != nil {
+	if (s.managedProxyResolver == nil || s.managedProxyResolver.DevelopmentBypass()) && account.ProxyID != nil {
 		switch {
 		case account.Proxy != nil:
 			proxyURL = account.Proxy.URL()
@@ -462,6 +475,7 @@ func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accou
 	if err != nil || account == nil {
 		return fmt.Errorf("account is unavailable")
 	}
+	requestedAccount := account
 	if account.IsShadow() {
 		account, err = resolveCredentialAccount(ctx, s.accountRepo, account)
 		if err != nil || account == nil {
@@ -471,7 +485,7 @@ func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accou
 	if !account.IsOpenAIAgentIdentity() {
 		return nil
 	}
-	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, expectedTaskID)
+	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, requestedAccount, expectedTaskID, s.managedProxyResolver)
 }
 
 func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, accountID int64) bool {
@@ -503,6 +517,7 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 		}
 		return headers, "", nil
 	}
+	requestedAccount := account
 	if account.IsShadow() {
 		if resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account); resolveErr == nil && resolved != nil {
 			account = resolved
@@ -513,8 +528,15 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil
 	}
-	if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, ""); err != nil {
+	if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, requestedAccount, "", s.managedProxyResolver); err != nil {
 		return nil, "", err
+	}
+	if requestedAccount.IsShadow() {
+		resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, requestedAccount)
+		if resolveErr != nil || resolved == nil {
+			return nil, "", fmt.Errorf("agent identity shadow credentials are unavailable")
+		}
+		account = resolved
 	}
 	key, err := agentIdentityKeyFromAccount(account)
 	if err != nil {

@@ -50,12 +50,17 @@ const (
 )
 
 type GeminiOAuthService struct {
-	sessionStore *geminicli.SessionStore
-	proxyRepo    ProxyRepository
-	oauthClient  GeminiOAuthClient
-	codeAssist   GeminiCliCodeAssistClient
-	driveClient  geminicli.DriveClient
-	cfg          *config.Config
+	sessionStore         *geminicli.SessionStore
+	proxyRepo            ProxyRepository
+	oauthClient          GeminiOAuthClient
+	codeAssist           GeminiCliCodeAssistClient
+	driveClient          geminicli.DriveClient
+	cfg                  *config.Config
+	managedProxyResolver ManagedProxyResolver
+}
+
+func (s *GeminiOAuthService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
 }
 
 type GeminiOAuthCapabilities struct {
@@ -114,7 +119,13 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	}
 
 	var proxyURL string
-	if proxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformGemini, AccountTypeOAuth)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if proxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()
@@ -139,6 +150,12 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	session := &geminicli.OAuthSession{
 		State:        state,
 		CodeVerifier: codeVerifier,
+		ProxyID: func() int64 {
+			if proxyID == nil {
+				return 0
+			}
+			return *proxyID
+		}(),
 		ProxyURL:     proxyURL,
 		RedirectURI:  redirectURI,
 		ProjectID:    strings.TrimSpace(projectID),
@@ -411,7 +428,13 @@ func (s *GeminiOAuthService) RefreshAccountGoogleOneTier(
 
 	// 获取 proxy URL
 	var proxyURL string
-	if account.ProxyID != nil && account.Proxy != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
@@ -457,7 +480,17 @@ func (s *GeminiOAuthService) ExchangeCode(ctx context.Context, input *GeminiExch
 	}
 
 	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformGemini, AccountTypeOAuth)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if input.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()
@@ -747,7 +780,13 @@ func (s *GeminiOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	}
 
 	var proxyURL string
-	if account.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if account.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()

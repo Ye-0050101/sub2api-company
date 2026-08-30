@@ -16,10 +16,15 @@ import (
 const grokDefaultAccessTokenTTL = 6 * time.Hour
 
 type GrokOAuthService struct {
-	sessionStore *xai.SessionStore
-	proxyRepo    ProxyRepository
-	oauthClient  GrokOAuthClient
-	config       *config.Config
+	sessionStore         *xai.SessionStore
+	proxyRepo            ProxyRepository
+	oauthClient          GrokOAuthClient
+	config               *config.Config
+	managedProxyResolver ManagedProxyResolver
+}
+
+func (s *GrokOAuthService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
 }
 
 func NewGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthClient, configs ...*config.Config) *GrokOAuthService {
@@ -101,6 +106,12 @@ func (s *GrokOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, 
 		CodeChallenge: codeChallenge,
 		ClientID:      xai.EffectiveClientID(),
 		Scope:         xai.EffectiveScope(),
+		ProxyID: func() int64 {
+			if proxyID == nil {
+				return 0
+			}
+			return *proxyID
+		}(),
 		ProxyURL:      proxyURL,
 		RedirectURI:   redirectURI,
 		CreatedAt:     time.Now(),
@@ -174,7 +185,16 @@ func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchange
 	}
 
 	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL, err = s.proxyURL(ctx, proxyID)
+		if err != nil {
+			return nil, err
+		}
+	} else if input.ProxyID != nil {
 		var err error
 		proxyURL, err = s.proxyURL(ctx, input.ProxyID)
 		if err != nil {
@@ -316,9 +336,19 @@ func (s *GrokOAuthService) RefreshAccountToken(ctx context.Context, account *Acc
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_INVALID_ACCOUNT_TYPE", "account is not an OAuth account")
 	}
 
-	proxyURL, err := s.proxyURL(ctx, account.ProxyID)
-	if err != nil {
-		return nil, err
+	var proxyURL string
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else {
+		var err error
+		proxyURL, err = s.proxyURL(ctx, account.ProxyID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	refreshToken := account.GetCredential("refresh_token")
 	if strings.TrimSpace(refreshToken) == "" {
@@ -433,6 +463,13 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 }
 
 func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string, error) {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformGrok, AccountTypeOAuth)
+		if err != nil {
+			return "", err
+		}
+		return decision.ProxyURL, nil
+	}
 	if proxyID == nil {
 		return "", nil
 	}

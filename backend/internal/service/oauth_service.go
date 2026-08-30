@@ -44,9 +44,14 @@ type ClaudeOAuthClient interface {
 
 // OAuthService handles OAuth authentication flows
 type OAuthService struct {
-	sessionStore *oauth.SessionStore
-	proxyRepo    ProxyRepository
-	oauthClient  ClaudeOAuthClient
+	sessionStore         *oauth.SessionStore
+	proxyRepo            ProxyRepository
+	oauthClient          ClaudeOAuthClient
+	managedProxyResolver ManagedProxyResolver
+}
+
+func (s *OAuthService) SetManagedProxyResolver(resolver ManagedProxyResolver) {
+	s.managedProxyResolver = resolver
 }
 
 // NewOAuthService creates a new OAuth service
@@ -95,9 +100,20 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 		return nil, fmt.Errorf("failed to generate session ID: %w", err)
 	}
 
-	// Get proxy URL if specified
+	accountType := AccountTypeOAuth
+	if scope == oauth.ScopeInference {
+		accountType = AccountTypeSetupToken
+	}
+
+	// Resolve the immutable company route before storing the OAuth session.
 	var proxyURL string
-	if proxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformAnthropic, accountType)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if proxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()
@@ -109,6 +125,12 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 		State:        state,
 		CodeVerifier: codeVerifier,
 		Scope:        scope,
+		ProxyID: func() int64 {
+			if proxyID == nil {
+				return 0
+			}
+			return *proxyID
+		}(),
 		ProxyURL:     proxyURL,
 		CreatedAt:    time.Now(),
 	}
@@ -151,9 +173,24 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, input *ExchangeCodeInpu
 		return nil, fmt.Errorf("session not found or expired")
 	}
 
-	// Get proxy URL
+	// The callback may repeat the ProxyID but cannot change the route selected
+	// when the session was created.
 	proxyURL := session.ProxyURL
-	if input.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+		if err != nil {
+			return nil, err
+		}
+		accountType := AccountTypeOAuth
+		if session.Scope == oauth.ScopeInference {
+			accountType = AccountTypeSetupToken
+		}
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformAnthropic, accountType)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if input.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()
@@ -184,15 +221,6 @@ type CookieAuthInput struct {
 
 // CookieAuth performs OAuth using sessionKey (cookie-based auto-auth)
 func (s *OAuthService) CookieAuth(ctx context.Context, input *CookieAuthInput) (*TokenInfo, error) {
-	// Get proxy URL if specified
-	var proxyURL string
-	if input.ProxyID != nil {
-		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
-		}
-	}
-
 	// Determine scope and if this is a setup token
 	// Internal API call uses ScopeAPI (org:create_api_key not supported)
 	scope := oauth.ScopeAPI
@@ -200,6 +228,24 @@ func (s *OAuthService) CookieAuth(ctx context.Context, input *CookieAuthInput) (
 	if input.Scope == "inference" {
 		scope = oauth.ScopeInference
 		isSetupToken = true
+	}
+
+	var proxyURL string
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		accountType := AccountTypeOAuth
+		if isSetupToken {
+			accountType = AccountTypeSetupToken
+		}
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, input.ProxyID, PlatformAnthropic, accountType)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if input.ProxyID != nil {
+		proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
+		if err == nil && proxy != nil {
+			proxyURL = proxy.URL()
+		}
 	}
 
 	// Step 1: Get organization info using sessionKey
@@ -310,7 +356,13 @@ func (s *OAuthService) RefreshAccountToken(ctx context.Context, account *Account
 	}
 
 	var proxyURL string
-	if account.ProxyID != nil {
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if account.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
 		if err == nil && proxy != nil {
 			proxyURL = proxy.URL()

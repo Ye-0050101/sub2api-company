@@ -1,1203 +1,220 @@
-# Sub2API Company Egress V1 — Development Spec
+# Sub2API Company Egress V1（ProxyID-only）
+
+## 1. 权威基线
+
+- 官方仓库：`Wei-Shaw/sub2api`
+- 固定 commit：`e8cb019fabf8b55199436229044cbf9aa7a82564`
+- tree：`f08b15f70e98dd19ac3f22cd3ab9cd3957ccd69f`
+- commit message：
+  - `Merge pull request #6078 from YogaSakti/fix/responses-custom-tool-call-id`
+  - `fix(openai): keep restored tool-call item IDs typed`
 
-## 0. Project
+本文是 Company Egress V1 的最终设计权威。V1 不创建 `egress_routes`，不增加 migration，不修改现有 Account/Proxy 数据库结构。
 
-Repository:
+## 2. 安全目标与边界
 
-Ye-0050101/sub2api-company
+托管账号的生产出站必须满足：
 
-Upstream:
+```text
+Account.ID
+  -> Account.ProxyID
+  -> immutable company policy keyed by ProxyID
+  -> existing Proxy record
+  -> ManagedProxyHealth READY
+  -> exact provider destination allowlist
+  -> CompanyHTTPUpstream or route-aware WS/OAuth factory
+  -> socks5h://literal-loopback-IP:port
+  -> isolated sing-box instance
+  -> fixed country/IPv4 egress
+```
 
-Wei-Shaw/sub2api
+失败、缺字段、不支持的平台、代理不健康、域名不在白名单或解析策略不合规时均 FAIL CLOSED。
 
-Production base commit:
+CompanyHTTPUpstream 是 HTTP 防御层，不是唯一安全边界。最终防泄漏还依赖 sing-box Guard、DNS containment、IPv6 deny 和按 Sub2API UID 的 nftables kill-switch。
 
-e8cb019fabf8b55199436229044cbf9aa7a82564
+## 3. ProxyID-only 配置
 
-Current development branch:
+```yaml
+company_egress:
+  development_bypass: false
+  managed_proxies:
+    - proxy_id: <US_A_PROXY_ID>
+      class: INTERNATIONAL_PROXY
+      country_code: US
+      expected_exit_ipv4: <FIXED_PUBLIC_IPV4>
+```
 
-company/egress-v1
+配置只引用现有 `Proxy.ID`。环境相关的 ID 和固定出口 IPv4 不写入源码。
 
-The company repository must remain easy to sync with upstream.
+生产不允许普通 runtime switch 关闭 enforcement 后继续服务。开发/测试可显式使用 `development_bypass`；release 模式使用该开关必须启动失败。
 
-Primary rule:
+## 4. Managed Proxy 不变量
 
-- Prefer ADDING new files.
-- Minimize modifications to upstream files.
-- Do not rewrite provider-specific gateway logic.
-- Do not mass-edit every ProxyID / Proxy call site.
-- Keep upstream Git history.
-- Keep upstream as remote `upstream`.
-- Never update production directly from upstream install scripts.
+每个被 `company_egress.managed_proxies` 引用的 Proxy 必须：
 
----
+- `protocol == socks5h`
+- `host` 是 canonical literal loopback IPv4（`127.0.0.0/8`）
+- 无 username/password
+- `status == active`
+- soft-deleted Proxy 由 repository 查询失败而拒绝
+- `expires_at == NULL`
+- `fallback_mode == none`
+- `backup_proxy_id == NULL`
+- 同一启动配置中 ProxyID 唯一
+- 不同 ProxyID 不得共享同一个本地 endpoint
+- 启动后 Proxy fingerprint 不得变化
 
-# 1. Business Goal
+Company ProxyRepository 禁止普通 Update/Delete 修改被引用 Proxy。数据库外直接篡改不属于应用授权路径；运行时 fingerprint 与 health gate 仍会 FAIL CLOSED。
 
-Sub2API will manage approximately 15+ AI accounts.
+`security.proxy_fallback.allow_direct_on_error=true` 在 company enforcement 启动时必须失败。AnyTLS/HY2/TUIC 的主备只在 sing-box 内处理，Sub2API 不得使用 direct fallback。
 
-Supported categories:
+## 5. V1 支持矩阵
 
-## International AI
+支持：
 
-Must use controlled international proxy route:
+- Claude/Anthropic：OAuth、Setup Token、API Key
+- OpenAI/Codex：OAuth、Setup Token、API Key
+- Grok：OAuth、API Key
+- Gemini 普通账号：OAuth、API Key（AI Studio、Code Assist、Google One）
+- DeepSeek、Kimi、Zhipu：API Key
+- 上述范围内的 inference、OAuth authorization/callback、token exchange、refresh、usage/quota、普通 Account Test
+- OpenAI/Grok WebSocket
 
-- Claude / Anthropic
-- OpenAI / GPT
-- Grok / xAI
-- Gemini where applicable
+明确 UNSUPPORTED，任何托管路径在网络前拒绝：
 
-Example:
+- Antigravity
+- Grok password/captcha auth
+- Gemini Batch
+- Vertex service_account
+- Vertex Batch/GCS
+- Bedrock
+- Ollama Cloud
+- generic upstream / `AccountTypeUpstream`
+- 其他未列出的 platform/type
+- 非官方 managed `base_url` 或 Anthropic `custom_base_url`
+- 由本地插件接管 managed OpenAI OAuth 出站
+- Brave/Tavily 第三方 Web Search emulation（managed 请求保留在官方 AI 上游原生工具路径）
 
-Claude-US-01 → US-A
-Claude-US-02 → US-A
-GPT-US-01    → US-A
-Grok-US-01   → US-A
-Claude-SG-01 → SG-A
+Batch Image 的 `enabled`、`queue_enabled` 或 `vertex_enabled` 在 company enforcement 下导致启动失败。
 
-## Chinese AI
+## 6. 路由类别
 
-May use China/server direct egress:
+- Claude/OpenAI/Grok/Gemini -> `INTERNATIONAL_PROXY`
+- DeepSeek/Kimi/Zhipu -> `CN_DIRECT`
+- `CN_DIRECT.country_code == CN`
 
-- DeepSeek
-- Kimi
-- Zhipu
+CN-DIRECT 仍使用内部 socks5h endpoint 进入 sing-box-cn，再由服务器直出；Sub2API 进程本身不获得 unrestricted public direct egress。
 
-BUT:
+同一国家可以有多个固定出口 ProxyID。账号通过自己的 ProxyID 精确选中其中一个；端口可由部署规划，loopback IP 可在 `127.0.0.0/8` 内使用 canonical literal 地址，只要不变量和唯一 endpoint 约束成立。V1 不允许把 host 放宽到任意 RFC1918 网段。
 
-Sub2API process itself must still NOT receive unrestricted direct Internet access.
+## 7. 精确目的域名
 
-Instead:
+仅允许 HTTPS/WSS、默认或显式 443、无 URL credentials、精确 hostname，不使用 wildcard：
 
-DeepSeek
-  ↓
-CN-DIRECT EgressRoute
-  ↓
-local SOCKS endpoint
-  ↓
-sing-box-cn
-  ↓
-direct
-  ↓
-DeepSeek API
+- Anthropic：`api.anthropic.com`、`claude.ai`、`claude.com`、`platform.claude.com`
+- OpenAI：`api.openai.com`、`auth.openai.com`、`chatgpt.com`
+- Grok：`api.x.ai`、`auth.x.ai`、`accounts.x.ai`、`cli-chat-proxy.grok.com`、`us-east-1.api.x.ai`、`us-west-2.api.x.ai`、`eu-west-1.api.x.ai`
+- Gemini：`generativelanguage.googleapis.com`、`cloudcode-pa.googleapis.com`、`accounts.google.com`、`oauth2.googleapis.com`、`cloudresourcemanager.googleapis.com`、`www.googleapis.com`
+- DeepSeek：`api.deepseek.com`
+- Kimi：`api.moonshot.cn`、`api.kimi.com`
+- Zhipu：`open.bigmodel.cn`、`api.z.ai`
 
-Therefore "CN direct" means the final public source IP is the main server IP, not that Sub2API itself directly connects to the Internet.
+`daily-cloudcode-pa.googleapis.com` 只属于 Antigravity，不在 V1 allowlist。
 
----
+数据库中保存的官方 `credentials.base_url` 可兼容；任何未通过上述精确策略的 relay/custom/Ollama URL 均拒绝。
 
-# 2. Final Architecture
+## 8. RouteHealth
 
-                     Sub2API
-                        |
-                  Account Route
-                        |
-       +----------------+----------------+
-       |                |                |
-      US-A             SG-A          CN-DIRECT
-       |                |                |
-127.0.0.1:11001 127.0.0.1:12001 127.0.0.1:13001
-       |                |                |
- sing-box-US      sing-box-SG       sing-box-CN
-    |     |          |     |             |
- AnyTLS  HY2       AnyTLS  HY2          direct
-    |     |          |     |             |
-    US VPS           SG VPS          Chinese AI APIs
-      |                |
-fixed US IP       fixed SG IP
+RouteHealth 是 runtime 状态，不新增数据库字段：
 
+- `READY`
+- `UNHEALTHY`
 
-Additional security layer:
+唯一编译期探针：
 
-Sub2API UID
-    |
-sing-box Guard TUN
-    |
-DNS interception / accidental direct handling
-    |
-nftables final kill switch
+- Probe A：`https://api.ipify.org?format=json`，只提供 IPv4 evidence
+- Probe B：`https://cloudflare.com/cdn-cgi/trace`，提供 IPv4 和 `loc`
 
----
+约束：
 
-# 3. Security Invariants
+- exact HTTPS scheme/hostname/path/query
+- 普通 TLS 证书验证
+- redirect disabled
+- 每个请求 10 秒超时
+- body 上限 16 KiB
+- 不允许管理员修改
+- 不回退到上游默认 HTTP probes
 
-These are mandatory.
+READY 条件：
 
-1. No valid EgressRoute: FAIL CLOSED.
+```text
+A.IP == B.IP
+A.IP == expected_exit_ipv4
+B.loc == country_code
+```
 
-2. Route class or required country mismatch: FAIL CLOSED.
+IP 必须是 canonical public IPv4。TLS failure、redirect、parse failure、IPv6、私网/保留地址、missing loc、IP disagreement、IP mismatch、country mismatch、Proxy 变化或 health TTL 过期均为 UNHEALTHY/FAIL CLOSED。
 
-3. Empty or invalid effective proxy: FAIL CLOSED.
+- startup preflight：所有配置 Proxy 必须先通过
+- periodic probe interval：60 秒
+- health TTL：120 秒
+- 请求在证据需刷新时同步验证；不得使用过期 READY
 
-4. International providers must never use CN-DIRECT.
+## 9. DNS 与 SOCKS 事实
 
-5. Claude/OpenAI/Grok/Gemini: INTERNATIONAL_PROXY only.
+锁定依赖 `golang.org/x/net v0.56.0`。当前 `proxy.FromURL` 对 `socks5` 与 `socks5h` 进入同一个 SOCKS5 dialer；internal/socks 对 hostname 使用 FQDN SOCKS address，即 hostname 交给 SOCKS server。
 
-6. DeepSeek/Kimi/Zhipu: CN_DIRECT allowed.
+V1 仍强制 `socks5h`，理由是 company canonical policy、明确远程 DNS 意图、统一 parser/config 语义与未来兼容性，不声称当前依赖的 `socks5` 必然本地解析。
 
-7. EgressRoute stores ProxyID, never ProxyURL.
+DNS fail-closed 由 application no-pre-resolution、Guard、approved resolver 和 nftables 共同保证。
 
-8. Managed Account.ProxyID must equal EgressRoute.ProxyID.
+## 10. HTTP、OAuth 与 WebSocket
 
-9. A route Proxy must be socks5h, use a literal internal IP, contain no credentials, use fallback_mode=none, have backup_proxy_id=NULL, expires_at=NULL, status=active and deleted_at=NULL.
+- HTTP 主路径由 CompanyHTTPUpstream 忽略调用方传入的 proxy string，重新按 AccountID 解析 ProxyID，并禁用 redirect。
+- Claude Usage 即使无 TLS Profile 也必须走 CompanyHTTPUpstream。
+- Claude/OpenAI/Grok/Gemini OAuth session 固定 ProxyID；callback 提供不同 ProxyID 时拒绝。
+- account refresh 每次重新解析 ProxyID 和 health。
+- Grok OAuth 使用固定官方 token endpoint；Grok password auth 关闭。
+- OpenAI/Grok WS 必须：`proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`。
+- WS 在 dial 前重新取得 EgressDecision，不能信任 Account.Proxy 或 raw proxy URL。
+- OpenAI privacy、Codex PAT 校验、Agent Identity task 注册、Codex models manifest 均须在创建独立 client 前取得同一 managed decision。
+- company enforcement 下插件不得接管 managed OpenAI HTTP/WS；可自行联网的第三方 Web Search emulation 不得执行。
 
-10. A Proxy referenced by an EgressRoute cannot be modified or deleted through ordinary Proxy administration.
+## 11. Threat Model
 
-11. Core EgressRoute fields cannot be modified while the route is referenced.
+单个 Sub2API process/UID 处理多个国家账号时，Linux UID/nftables 可以强制：
 
-12. Managed accounts cannot use custom_base_url.
+- no host public direct
+- no unintended IPv6
+- no direct DNS
 
-13. security.proxy_fallback.allow_direct_on_error must be forced to false.
+Linux kernel 不知道 Account identity，不能单独强制 US account 只能访问 US SOCKS、SG account 只能访问 SG SOCKS。per-account 地理选择是应用不变量：
 
-14. Sub2API itself must not have unrestricted public IPv4, public IPv6 or direct DNS access.
+`ProxyID policy + immutable decision + route-aware factories + static CI + tests`。
 
-15. Proxy failure and AnyTLS/HY2 failure must never fall back to a Sub2API host-direct connection. AnyTLS/HY2 fallback is handled only inside sing-box.
+Host guard 是 origin-leak boundary，不是 account-country selection engine。未来若需 kernel-level per-country/account isolation，应升级为 separate worker/UID/netns，不属于 V1。
 
-16. OAuth, token exchange, token refresh, usage queries, account tests, WebSocket and normal inference requests for one account must use that account's EgressRoute.
+## 12. 生产启用顺序
 
-17. Grok password authentication is disabled in V1.
-
-18. AnyTLS/HY2 passwords, certificates and VPS secrets do NOT belong in Sub2API DB; their implementation remains outside Sub2API.
-
-19. DNS leak prevention is primarily an OS/sing-box responsibility, not something to solve by invasive modifications throughout Sub2API.
-
----
-
-# 4. Upstream Source Findings
-
-Important facts found during source audit:
-
-## Main HTTP upstream
-
-Sub2API currently supports:
-
-proxyURL == ""
-→ direct connection
-
-Therefore original behavior is not strict enough.
-
-Configured invalid proxy generally returns an error rather than silently falling back, which is good.
-
-## HTTPUpstream is NOT the only network path
-
-Do not assume all Sub2API traffic goes through HTTPUpstream.
-
-There are independent network paths including:
-
-- Claude OAuth
-- token refresh
-- some usage fetch paths
-- httpclient.GetClient
-- http.DefaultClient
-- net.Dialer
-- prompt audit networking
-- other provider-specific networking
-
-Therefore:
-
-Application EgressRoute controls account routing.
-
-Linux/sing-box/nftables provide the final no-direct security boundary.
-
-## DNS
-
-Current code contains calls equivalent to:
-
-net.DefaultResolver.LookupIP(...)
-
-Therefore socks5h alone does not guarantee that all DNS resolution happens through the account proxy.
-
-For the locked dependency `golang.org/x/net v0.56.0`, `proxy.FromURL` sends both `socks5` and `socks5h` through the same SOCKS5 dialer. When the target is a hostname, `internal/socks` encodes it as an FQDN SOCKS address and sends it to the SOCKS server. The current dependency evidence therefore does not support a claim that `socks5` necessarily performs local DNS while only `socks5h` performs remote DNS.
-
-Company V1 still requires `protocol == socks5h` as canonical company policy, as an explicit and future-proof statement of remote-DNS intent, and to keep parser/configuration semantics uniform. DNS fail-closed requires application no-pre-resolution plus Guard, the approved resolver and nftables; the scheme label alone is not the security boundary.
-
----
-
-# 5. EgressRoute Model
-
-Add new entity:
-
-EgressRoute
-
-V1 fields:
-
-id
-route_key
-name
-route_class
-country_code
-proxy_id
-expected_exit_ipv4
-notes
-created_at
-updated_at
-deleted_at
-
-Examples:
-
-US-A
-
-route_key:
-US-A
-
-route_class:
-INTERNATIONAL_PROXY
-
-country_code:
-US
-
-proxy_id:
-<FK to an existing internal socks5h Proxy>
-
-
-SG-A
-
-route_class:
-INTERNATIONAL_PROXY
-
-country_code:
-SG
-
-proxy_id:
-<FK to an existing internal socks5h Proxy>
-
-
-CN-DIRECT
-
-route_class:
-CN_DIRECT
-
-country_code:
-CN
-
-proxy_id:
-<FK to an existing internal socks5h Proxy>
-
-
-Important:
-
-Even CN-DIRECT uses an internal SOCKS endpoint from Sub2API's perspective.
-
-Sub2API never gets a special unrestricted `direct` branch.
-
-Current deployment fact: the main server public egress geolocates to China. CN-DIRECT therefore keeps `route_class = CN_DIRECT` and `country_code = CN`. Its real fixed `expected_exit_ipv4` is a deployment value that must be filled before activation and verified by RouteHealth.
-
-EgressRoute does not duplicate ProxyURL. The runtime URL is resolved through the Proxy foreign key.
-
-The referenced Proxy must use socks5h with a literal internal IP and no credentials. It must have fallback_mode=none, backup_proxy_id=NULL and expires_at=NULL.
-
-It must also have status=active and deleted_at=NULL. service.Proxy.URL() does not check Status; IsActive() is separate logic, so URL construction is never proof that a Proxy is usable.
-
-V1 does not add route.enabled or dns_addr.
-
-Database constraints:
-
-- route_key is UNIQUE
-- proxy_id is UNIQUE and a foreign key to proxies.id
-
-One Proxy row can belong to only one EgressRoute. UNIQUE proxy_id alone does not prevent two Proxy rows naming the same listener, so managed canonical `(protocol, host, port)` endpoint duplication must also be rejected.
-
-A referenced route's core fields — route_key, route_class, country_code, proxy_id and required-country policy — are immutable until every account reference is removed.
-
-A Proxy referenced by an EgressRoute is protected from ordinary modification and deletion.
-
----
-
-# 6. Account Fields
-
-Add minimal first-class fields:
-
-EgressRouteID *int64
-
-RequiredEgressCountry *string
-
-Existing ProxyID *int64 remains present and, for a managed account, must equal EgressRoute.ProxyID at create, update, clone, bulk-update and request resolution time.
-
-Managed accounts must not set or retain custom_base_url.
-
-Do NOT globally embed/load the entire EgressRoute object into every Account hot-path query unless necessary.
-
-Avoid unnecessary `WithEgressRoute()` changes throughout upstream repositories.
-
-Resolver may independently query route policy by account ID.
-
----
-
-# 7. Route Classes
-
-Initial enum:
-
-INTERNATIONAL_PROXY
-
-CN_DIRECT
-
-Platform policy:
-
-Anthropic / Claude:
-INTERNATIONAL_PROXY only
-
-OpenAI:
-INTERNATIONAL_PROXY only
-
-Grok:
-INTERNATIONAL_PROXY only
-
-Gemini:
-INTERNATIONAL_PROXY only
-
-Antigravity:
-UNSUPPORTED for managed V1; any managed Antigravity account must FAIL CLOSED. Do not infer a US or SG route. Any future support requires a separate V2 route audit.
-
-Every account type not explicitly present in the managed V1 platform allowlist is UNSUPPORTED and FAIL CLOSED by default.
-
-DeepSeek:
-CN_DIRECT allowed
-
-Kimi:
-CN_DIRECT allowed
-
-Zhipu:
-CN_DIRECT allowed
-
-Admin configuration must reject invalid combinations.
-
-Runtime resolver must independently reject invalid combinations even if UI validation fails.
-
----
-
-# 8. Internal Proxy Validation
-
-Egress proxy endpoints must be tightly restricted.
-
-Initial allowed format:
-
-socks5h://<literal-internal-IP>:<port>
-
-Do NOT allow:
-
-public proxy IP
-hostname proxy target
-HTTP proxy
-HTTPS proxy
-arbitrary SOCKS endpoint
-
-Initial allowed IP ranges can be:
-
-127.0.0.0/8
-
-and later:
-
-10.200.0.0/16
-
-Do not allow the whole 10.0.0.0/8 unless explicitly required.
-
-Examples allowed:
-
-socks5h://127.0.0.1:11001
-
-socks5h://127.0.0.1:12001
-
-socks5h://127.0.0.1:13001
-
-Potential future:
-
-socks5h://10.200.1.2:1080
-
----
-
-# 9. EgressPolicyResolver
-
-Create a small service interface such as:
-
-type EgressPolicyResolver interface {
-    ResolveForAccount(
-        ctx context.Context,
-        accountID int64,
-    ) (*EgressDecision, error)
-}
-
-EgressDecision contains only runtime policy:
-
-RouteID
-RouteKey
-RouteClass
-CountryCode
-ProxyID
-ProxyURL
-ExpectedExitIPv4
-
-Resolver checks:
-
-- account exists
-- route assigned
-- route exists
-- required country exists
-- country matches
-- platform allowed for route class
-- account ProxyID equals route ProxyID
-- referenced Proxy exists
-- referenced Proxy satisfies the socks5h/literal-internal-IP/no-credentials/no-fallback/no-expiry rules
-- referenced Proxy status is active and deleted_at is NULL
-- managed account has no custom_base_url
-- runtime RouteHealth is READY and not expired
-
-No valid result:
-return error
-
-Never return empty proxy as a normal successful decision.
-
-security.proxy_fallback.allow_direct_on_error is a production startup invariant, not a per-request hot-path check. If it is true in company production mode, the process must FAIL STARTUP.
-
-## Runtime RouteHealth
-
-V1 has no database route.enabled field. Availability is represented separately by runtime RouteHealth:
-
-READY
-
-UNHEALTHY
-
-EgressResolver may return EgressDecision only when the route is READY and its health record is within TTL.
-
-V1 health rules:
-
-- startup preflight: synchronously probe every EgressRoute referenced by a managed account before managed traffic is admitted
-- production startup/activation: if any referenced managed route is not READY, managed service activation fails closed
-- periodic probe interval: 60 seconds
-- health TTL: 120 seconds from the last successful verified probe
-- probe timeout: a company-owned bounded deadline; do not inherit administrator-configurable diagnostic probe behavior
-- probe transport: derive the URL from the validated route Proxy and use the approved company parser/dialer; the current ProxyExitInfoProber is not a security authority because its defaults are HTTP, it accepts configured replacements, it returns the first success, and ipify supplies no country
-- Probe A is exactly `https://api.ipify.org?format=json` and supplies IPv4 evidence only
-- Probe B is exactly `https://cloudflare.com/cdn-cgi/trace` and supplies IPv4 plus `loc` CountryCode evidence
-- both endpoints are a compile-time allowlist with exact HTTPS scheme, hostname, path and query where present; normal TLS verification, redirects disabled, bounded timeout and bounded body are mandatory
-- administrators cannot modify either endpoint, and the verifier cannot fall back to upstream default HTTP probes
-- READY requires `A.IP == B.IP`, `A.IP == expected_exit_ipv4`, and `B.loc == route.country_code`
-- evidence IP must be canonical public IPv4
-- TLS failure, redirect, parse failure, IPv6, private IP, missing `loc`, IP disagreement, IP mismatch or country mismatch immediately produces UNHEALTHY and FAIL CLOSED
-- probe failure: immediately mark UNHEALTHY; do not retain READY until TTL
-- stale/expired health: treat as UNHEALTHY and fail closed
-- exit IP: canonical IPv4 returned by the probe must exactly equal expected_exit_ipv4
-- exit country: normalized CountryCode must exactly equal route.country_code
-- missing IP or CountryCode: cannot become READY
-- mismatch: mark UNHEALTHY and fail managed requests closed
-- recovery: only a later complete matching probe may return the route to READY
-
-CN_DIRECT has no implicit exception in V1: its verified CountryCode must be CN and its actual exit IPv4 must equal expected_exit_ipv4. Any future exception requires an explicit, documented policy revision.
-
----
-
-# 10. HTTPUpstream Strategy
-
-Do NOT heavily modify:
-
-backend/internal/repository/http_upstream.go
-
-Prefer wrapper/decorator:
-
-company_http_upstream.go
-
-Concept:
-
-type companyHTTPUpstream struct {
-    base     service.HTTPUpstream
-    resolver service.EgressPolicyResolver
-}
-
-For requests with a real accountID:
-
-accountID
-  ↓
-resolver.ResolveForAccount()
-  ↓
-route ProxyID (must equal Account.ProxyID)
-  ↓
-validated Proxy record
-  ↓
-derived effective ProxyURL
-  ↓
-official HTTPUpstream
-
-Ignore caller-selected ProxyURL as the final authority when company strict mode is active.
-
-Keep original HTTPUpstream implementation as intact as possible.
-
-Production DI should inject CompanyHTTPUpstream.
-
----
-
-# 11. Important Exception: HTTPUpstream Is Not Enough
-
-The following must also be checked and integrated with EgressRoute:
-
-## Claude OAuth
-
-Initial OAuth happens before the Account may exist.
-
-Therefore account creation flow should select:
-
-Required Country
-+
-EgressRoute
-
-BEFORE starting OAuth.
-
-OAuth session should preserve selected EgressRoute identity.
-
-OAuth authorization, code exchange and subsequent created account must use the same route.
-
-The session must also preserve the final ProxyID. Callback/code exchange must reject route or ProxyID drift.
-
-## Token Refresh
-
-Existing refresh logic may use legacy ProxyID.
-
-Company version must resolve EgressRoute instead.
-
-Claude, OpenAI, Grok and Gemini authorization, token exchange and refresh all use the same route and final ProxyID.
-
-## Usage Queries
-
-Some Claude usage paths currently bypass HTTPUpstream when TLS profile is absent.
-
-Company V1 must route Claude usage through CompanyHTTPUpstream even when no TLS Profile is selected.
-
-## Account Connectivity Tests
-
-Where they already call HTTPUpstream with accountID, wrapper should automatically enforce the route.
-
-## OpenAI/Grok/Gemini OAuth
-
-Audit their independent clients and ensure the same invariant:
-
-one account
-→ one EgressRoute
-→ OAuth/refresh/usage/inference all consistent
-
-Do not assume they automatically use HTTPUpstream.
-
-Grok password authentication is disabled in V1.
-
-OpenAI/Grok WebSocket must resolve and validate the final ProxyID against EgressRoute.ProxyID before dialing.
-
-Go 1.27 `net/http.Transport` supports both socks5 and socks5h Proxy URLs. The current WebSocket risk is not missing SOCKS5H support; it is that raw `url.Parse(proxyURL)` bypasses project `proxyurl.Parse` policy validation. The company dial path must be `proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`, preserving the project's fail-fast parser, canonical normalization and approved transport construction.
-
----
-
-# 12. Legacy Proxy
-
-Do NOT remove upstream Proxy support.
-
-Keep:
-
-Proxy
-ProxyID
-existing upstream Proxy features
-
-Reason:
-
-Minimize upstream conflicts.
-
-Company strict mode takes precedence for managed account egress.
-
-Legacy features may remain for upstream compatibility.
-
-Do not mass-edit all account.Proxy usages unless required for security-critical account flows.
-
-For managed accounts:
-
-- account.proxy_id must equal route.proxy_id
-- custom_base_url is forbidden
-- security.proxy_fallback.allow_direct_on_error is forced false
-- Sub2API proxy fallback cannot be used for AnyTLS/HY2 failure
-
-AnyTLS/HY2 primary/backup behavior remains entirely inside sing-box.
-
-In company production mode, allow_direct_on_error=true causes startup failure. EgressResolver does not repeat this configuration check on every request.
-
-Proxy administration must reject ordinary update/delete operations when the Proxy is referenced by an EgressRoute.
-
----
-
-# 13. Database Migration
-
-Add new `egress_routes` table.
-
-Add nullable columns to existing accounts first:
-
-egress_route_id
-
-required_egress_country
-
-Do NOT initially make egress_route_id NOT NULL because existing production accounts already exist.
-
-Strict application logic determines schedulability / request rejection.
-
-The new egress_routes table stores proxy_id as a UNIQUE FK to the existing proxies table and route_key is UNIQUE. It does not store proxy_url, enabled or dns_addr.
-
-Applied migrations are immutable.
-
-Never edit a migration after production has applied it.
-
-Use a company migration namespace that avoids upstream numbering conflicts.
-
-Example:
-
-900000_company_001_egress_routes.sql
-
-900001_company_002_xxx.sql
-
----
-
-# 14. Files Preferably Added
-
-Prefer new files such as:
-
-backend/ent/schema/egress_route.go
-
-backend/internal/service/egress_route.go
-
-backend/internal/repository/egress_route_repo.go
-
-backend/internal/repository/egress_policy_resolver.go
-
-backend/internal/repository/company_http_upstream.go
-
-backend/internal/handler/admin/egress_route_handler.go
-
-company-specific tests
-
-COMPANY_EGRESS_V1_SPEC.md
-
-COMPANY_PATCHSET.md
-
----
-
-# 15. Upstream Files Expected to Need Small Changes
-
-Likely:
-
-backend/ent/schema/account.go
-
-backend/internal/service/account.go
-
-backend/internal/service/account_service.go
-
-backend/internal/repository/account_repo.go
-
-backend/internal/repository/wire.go
-
-OAuth service/handler paths
-
-Claude usage path
-
-OpenAI/Grok WebSocket path
-
-Proxy admin update/delete guards
-
-security.proxy_fallback setting enforcement
-
-Admin account API
-
-Account create/edit frontend
-
-EgressRoute admin UI/router
-
-Try to keep this list minimal.
-
----
-
-# 16. Files/Subsystems We Prefer NOT to Modify
-
-Unless absolutely necessary:
-
-gateway_forward.go
-
-http_upstream.go
-
-provider request body transformations
-
-Claude protocol transformations
-
-OpenAI protocol transformations
-
-Grok protocol transformations
-
-Gemini protocol transformations
-
-TLS fingerprint implementation
-
-billing calculation
-
-token counting
-
-scheduler algorithms
-
-AnyTLS implementation
-
-HY2 implementation
-
-sing-box implementation
-
-generated Ent files
-
-Never manually edit generated Ent code.
-
-Modify Ent schema and regenerate instead.
-
----
-
-# 17. DNS / Linux Security Plan
-
-Do NOT attempt large invasive route-aware DNS rewrites throughout Go V1.
-
-Current problem:
-
-Sub2API may call:
-
-net.DefaultResolver
-
-Therefore final production layer will use:
-
-sing-box Guard TUN
-+
-Sub2API UID-specific capture
-+
-dedicated service DNS/resolv.conf
-+
-DNS hijack where appropriate
-+
-nftables kill switch
-+
-public IPv6 denial
-
-Important Linux issue:
-
-Do not rely only on hijacking DNS sent to 127.0.0.53/systemd-resolved.
-
-Sub2API service should eventually use a dedicated resolver path that is captured by the Guard network layer.
-
----
-
-# 18. sing-box Roles
-
-Three/four logical services may exist:
-
-sing-box-US
-→ US AnyTLS primary
-→ US HY2 backup
-
-sing-box-SG
-→ SG AnyTLS primary
-→ SG HY2 backup
-
-sing-box-CN
-→ approved Chinese AI domains direct
-
-sing-box-GUARD
-→ safety interception / DNS / unexpected Sub2API direct traffic
-
-AnyTLS and HY2 for one country may terminate on the same VPS/public IP.
-
-Manual failover first.
-
-Do not introduce complex automatic cross-country failover in V1.
-
----
-
-# 19. nftables Final Policy
-
-Eventually enforce at kernel level.
-
-Sub2API UID:
-
-allow required local resources only:
-
-- localhost
-- PostgreSQL
-- Redis
-- approved internal EgressRoute endpoints
-- approved Guard/TUN DNS path
-
-deny:
-
-- arbitrary public IPv4
-- all unintended public IPv6
-- direct DNS
-- direct Anthropic/OpenAI/Grok/Gemini access
-
-sing-box-US UID:
-
-allow only exact US VPS IP/protocol/ports needed for AnyTLS/HY2
-
-sing-box-SG UID:
-
-allow only exact SG VPS IP/protocol/ports
-
-CN service:
-
-allow only explicit approved Chinese AI destinations/policy
-
-Never use:
-
-iptables -F
-
-nft flush ruleset
-
-ufw reset
-
-because SSH/Nginx must not be destroyed.
-
-## V1 Threat Model: UID Boundary versus Account Geography
-
-A single Sub2API process/UID handles accounts assigned to multiple countries. Linux UID/nftables policy can enforce no host public direct, no unintended IPv6 and no direct DNS. It cannot see Account identity and therefore cannot independently enforce `US account -> only US SOCKS` or `SG account -> only SG SOCKS` when both local SOCKS endpoints are allowed to the same UID.
-
-Per-account geographic selection is an application invariant enforced by EgressRoute, immutable EgressDecision, route-aware HTTP/WS/OAuth/Refresh/Usage/Batch factories, CI/static guards and tests. The host guard is the origin-leak boundary, not the account-country selection engine.
-
-Kernel-level per-country/account isolation would require separate workers, UIDs and/or network namespaces. That is a V2 architecture and is outside V1.
-
----
-
-# 20. Required Security Tests
-
-At minimum:
-
-AccountWithoutRoute
-→ rejected
-
-CountryMismatch
-→ rejected
-
-PlatformRouteClassMismatch
-→ rejected
-
-EmptyProxy
-→ rejected
-
-PublicProxyEndpoint
-→ rejected
-
-HostnameProxyEndpoint
-→ rejected
-
-WrongCallerProxy
-→ ignored / replaced by account EgressRoute
-
-CorrectUSRoute
-→ US endpoint
-
-CorrectSGRoute
-→ SG endpoint
-
-DeepSeekCNRoute
-→ CN internal endpoint
-
-ClaudeCNRoute
-→ rejected
-
-ProxyDown
-→ request fails
-
-No direct fallback
-→ guaranteed by tests + OS layer
-
-OAuth route consistency
-→ authorization/token exchange/refresh same route
-
-Usage route consistency
-→ same account route
-
-Account test route consistency
-→ same account route
-
-Later integration tests:
-
-kill sing-box-US
-→ US Claude request fails
-
-kill AnyTLS/HY2
-→ no host direct fallback
-
-tcpdump physical interface
-→ no Anthropic/OpenAI direct packets from Sub2API
-
-DNS capture
-→ no Sub2API DNS to ordinary host/ISP resolver
-
-IPv6
-→ no public IPv6 escape
-
-ReferencedProxyMutation
-→ rejected
-
-ReferencedProxyDeletion
-→ rejected
-
-ReferencedRouteCoreMutation
-→ rejected while referenced
-
-AccountProxyRouteProxyMismatch
-→ rejected
-
-ManagedCustomBaseURL
-→ rejected
-
-GrokPasswordAuth
-→ disabled
-
-OpenAIWebSocketProxyIDMismatch
-→ rejected before dial
-
-ClaudeUsageWithoutTLSProfile
-→ still routed through CompanyHTTPUpstream
-
-DirectFallbackConfigTrue
-→ production startup failure when true
-
-ProxyInactive
-→ FAIL CLOSED
-
-ProxySoftDeleted
-→ FAIL CLOSED
-
-DuplicateRouteProxyID
-→ DB/service reject
-
-WebSocketRawProxyParserBypass
-→ prohibited; route-aware dialer test requires proxyurl.Parse and approved transport
-
-ExitIPv4Mismatch
-→ route UNHEALTHY + FAIL CLOSED
-
-ExitCountryMismatch
-→ route UNHEALTHY + FAIL CLOSED
-
-RouteHealthExpired
-→ FAIL CLOSED
-
----
-
-# 21. Repository Maintenance Rules
-
-Static CI must reject new managed account-sensitive production use of:
-
-- `http.DefaultClient`
-- raw `url.Parse(proxyURL)`
-- an empty-ProxyURL client
-- direct `net.Dialer`
-- an unapproved resolver
-- an unapproved account outbound factory
-
-An exception is permitted only when explicitly recorded in the audited allowlist. CI is a regression guard; it does not replace code review, route-aware factories or host containment.
-
-Keep repository simple.
-
-Long-lived:
-
-main
-
-Temporary:
-
-company/egress-v1 during initial work
-
-future:
-feature/*
-upgrade/upstream-*
-
-Remote structure:
-
-origin
-→ Ye-0050101/sub2api-company
-
-upstream
-→ Wei-Shaw/sub2api
-
-Do not mirror all upstream development branches into company repository.
-
----
-
-# 22. Upstream Update SOP
-
-Every update:
-
-1. git fetch upstream --tags
-
-2. Review upstream release / diff.
-
-3. Do not immediately deploy.
-
-4. Create temporary branch:
-
-upgrade/upstream-X
-
-5. Merge/rebase intended upstream version.
-
-6. Review files listed in COMPANY_PATCHSET.md.
-
-7. Run upstream tests.
-
-8. Run company security tests.
-
-9. Build company binary.
-
-10. Deploy to staging.
-
-11. Run leakage/fail-closed tests.
-
-12. Only then merge to main.
-
-13. Only then deploy production.
-
-Never:
-
-official install.sh
-→ directly overwrite company production binary
-
-Never:
-
-git pull upstream
-→ restart production without tests
-
----
-
-# 23. COMPANY_PATCHSET.md Purpose
-
-Maintain a short list of:
-
-- every upstream file modified
-- every company-specific file added
-- security invariants
-- upstream areas requiring review on upgrade
-
-Goal:
-
-Most company logic lives in new files.
-
-Target:
-
-~90% of customization in new files where practical.
-
-Keep modifications to upstream core small and obvious.
-
----
-
-# 24. Development Order
-
-Production enforcement cannot be disabled by an ordinary runtime switch while the service continues handling managed traffic. Feature switches are permitted only in development and tests.
-
-Production rollback means deploying the previously approved company binary/version. It must not mean disabling fail-closed enforcement in the current binary. A rollback target that cannot enforce these invariants must not serve managed accounts.
-
-Production activation order is mandatory:
-
+```text
 application code/tests
-↓
-staging
-↓
-sing-box routes
-↓
-DNS containment
-↓
-IPv6 deny
-↓
-nftables Sub2API UID kill-switch
-↓
-destructive leak tests
-↓
-enable managed accounts for production traffic
+-> staging
+-> sing-box routes
+-> DNS containment
+-> IPv6 deny
+-> nftables Sub2API UID kill-switch
+-> destructive leak tests
+-> managed production traffic
+```
 
-Managed accounts must not carry production traffic before the kernel guard, DNS containment and destructive leak tests are complete.
+不得先启用 managed production traffic 再补 kernel guard。
 
-Phase 0:
-freeze exact upstream production baseline
+## 13. 结论
 
-Phase 1:
-EgressRoute schema/model/repository
+```text
+FINAL DESIGN VERDICT: FREEZE
+PROXYID-ONLY VERDICT: ADOPT
+PRODUCTION READINESS: NOT READY
+```
 
-Phase 2:
-Account binding + validation
-
-Phase 3:
-CompanyHTTPUpstream wrapper
-
-Phase 4:
-Claude/OpenAI/Grok/Gemini OAuth and refresh consistency
-
-Phase 5:
-Claude usage and other usage/quota consistency
-
-Phase 6:
-OpenAI/Grok WebSocket and account-test consistency
-
-Phase 7:
-route class platform policy
-
-Phase 8:
-RouteHealth preflight/periodic probes, Proxy/route immutability, no-custom-base-URL and fail-closed tests
-
-Phase 9:
-build company binary
-
-Phase 10:
-staging deployment
-
-Phase 11:
-sing-box routes
-
-Phase 12:
-DNS containment
-
-Phase 13:
-IPv6 deny
-
-Phase 14:
-nftables Sub2API UID kill-switch
-
-Phase 15:
-destructive security testing
-
-Phase 16:
-enable managed accounts for production traffic
-
----
-
-# 25. Current Instruction to Codex
-
-Do NOT deploy anything to the production server yet.
-
-Do NOT change firewall/DNS/networking yet.
-
-First:
-
-1. Verify exact repository/base state.
-2. Read this spec.
-3. Create COMPANY_PATCHSET.md.
-4. Audit the exact production-base source.
-5. Produce a file-level implementation plan.
-6. Only after review begin Phase 1.
-
-Security is more important than minimizing the number of code lines.
-
-Upstream compatibility is the second priority.
-
-Do not silently weaken TLS verification.
-
-Do not introduce any direct fallback.
-
----
-
-# 26. Final Evidence Audit Gate
-
-The authoritative Phase 0.5 evidence record is `docs/company/EGRESS_FINAL_EVIDENCE_AUDIT_0.1.183.md`. Where an earlier planning statement conflicts with that evidence record, the evidence record controls until an explicit reviewed design decision updates this specification.
-
-Final evidence resolutions at the fixed baseline:
-
-- Managed Antigravity is UNSUPPORTED and always FAIL CLOSED in V1. Future support requires a separate V2 route audit; V1 does not infer US or SG.
-- Gemini/Vertex batch providers and Vertex service-account token exchange are independent client paths and must receive EgressDecision; HTTPUpstream decoration cannot cover them.
-- UNIQUE route `proxy_id` is not enough: two Proxy rows can name one canonical internal endpoint. Managed `(protocol, canonical_host, port)` duplication must be rejected to prevent route/port cross-wiring.
-- RouteHealth evidence endpoints are locked to `https://api.ipify.org?format=json` and `https://cloudflare.com/cdn-cgi/trace` under the exact allowlist and validation rules in this specification. The existing ProxyExitInfoProber remains an administrator diagnostic only.
-- CN-DIRECT keeps route class CN_DIRECT and country CN. CN-DIRECT, US-A and SG-A require real fixed `expected_exit_ipv4` deployment values before they can become READY.
-
-Architecture design and production activation are separate gates:
-
-`FINAL DESIGN VERDICT: FREEZE`
-
-`PRODUCTION READINESS: NOT READY`
-
-Phase 1 development may begin after this document-only correction is accepted. Managed production traffic remains forbidden until the fixed exit IPv4 values are populated and the sing-box, DNS containment, IPv6 deny, nftables UID kill-switch and destructive leak tests all pass.
+Phase 1 源码开发可以进行；在真实 ProxyID/固定出口配置、CI、构建、staging、DNS/IPv6/nftables 和泄漏测试全部通过前，禁止 managed production traffic。

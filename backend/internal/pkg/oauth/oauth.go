@@ -40,6 +40,7 @@ type OAuthSession struct {
 	State        string    `json:"state"`
 	CodeVerifier string    `json:"code_verifier"`
 	Scope        string    `json:"scope"`
+	ProxyID      int64     `json:"proxy_id,omitempty"`
 	ProxyURL     string    `json:"proxy_url,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }

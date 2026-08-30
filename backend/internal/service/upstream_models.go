@@ -410,7 +410,8 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 			s.accountRepo,
 			s.agentIdentityWS,
 			&s.agentIdentityTaskMu,
-			credentialAccount,
+			account,
+			s.managedProxyResolver,
 		)
 		if authErr != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to build OpenAI Agent Identity authentication", authErr)

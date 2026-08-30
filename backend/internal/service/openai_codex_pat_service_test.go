@@ -60,6 +60,26 @@ func TestOpenAIOAuthService_ValidateCodexPersonalAccessTokenRequiresATPrefix(t *
 	require.Contains(t, err.Error(), "at-")
 }
 
+func TestOpenAIOAuthService_ValidateCodexPATForProxyIDFailsClosed(t *testing.T) {
+	proxyID := int64(7)
+	policies, err := NewManagedProxyPolicies(managedProxyConfig(proxyID))
+	require.NoError(t, err)
+	resolver, err := NewManagedProxyResolver(
+		&managedAccountRepositoryStub{accounts: map[int64]*Account{}},
+		&managedProxyRepositoryStub{proxies: map[int64]*Proxy{proxyID: validManagedProxy(proxyID)}},
+		policies,
+		&managedProxyHealthStub{epoch: 1},
+	)
+	require.NoError(t, err)
+
+	svc := NewOpenAIOAuthService(nil, nil)
+	svc.SetManagedProxyResolver(resolver)
+	defer svc.Stop()
+
+	_, err = svc.ValidateCodexPersonalAccessTokenForProxyID(t.Context(), "at-test-token", nil)
+	require.ErrorIs(t, err, ErrManagedEgressPolicy)
+}
+
 func TestOpenAIOAuthService_BuildAccountCredentialsForPAT(t *testing.T) {
 	svc := NewOpenAIOAuthService(nil, nil)
 	defer svc.Stop()

@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -68,25 +66,19 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 
 	var resp *http.Response
 
-	// 如果有 TLS Profile 且有 HTTPUpstream，使用 DoWithTLS
-	if opts.TLSProfile != nil && s.httpUpstream != nil {
+	if s.httpUpstream == nil {
+		return nil, fmt.Errorf("company egress: Claude usage HTTP upstream is not configured")
+	}
+
+	// Both TLS-profile and ordinary Claude Usage calls must pass through the
+	// company decorator. TLS profile selection must never decide the route.
+	if opts.TLSProfile != nil {
 		resp, err = s.httpUpstream.DoWithTLS(req, opts.ProxyURL, opts.AccountID, 0, opts.TLSProfile)
 		if err != nil {
 			return nil, fmt.Errorf("request with TLS fingerprint failed: %w", err)
 		}
 	} else {
-		// 不启用 TLS 指纹，使用普通 HTTP 客户端
-		client, err := httpclient.GetClient(httpclient.Options{
-			ProxyURL:           opts.ProxyURL,
-			Timeout:            30 * time.Second,
-			ValidateResolvedIP: true,
-			AllowPrivateHosts:  s.allowPrivateHosts,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create http client failed: %w", err)
-		}
-
-		resp, err = client.Do(req)
+		resp, err = s.httpUpstream.Do(req, opts.ProxyURL, opts.AccountID, 0)
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
 		}

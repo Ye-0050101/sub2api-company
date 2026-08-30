@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"strconv"
@@ -57,6 +58,13 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("not a gemini oauth or service account")
 	}
 	if account.Type == AccountTypeServiceAccount {
+		if p.geminiOAuthService != nil && p.geminiOAuthService.managedProxyResolver != nil &&
+			!p.geminiOAuthService.managedProxyResolver.DevelopmentBypass() {
+			if _, err := p.geminiOAuthService.managedProxyResolver.ResolveForAccount(ctx, account.ID); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("%w: Vertex service_account", ErrManagedEgressUnsupported)
+		}
 		return p.getServiceAccountAccessToken(ctx, account)
 	}
 
@@ -117,7 +125,14 @@ func (p *GeminiTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		}
 
 		var proxyURL string
-		if account.ProxyID != nil && p.geminiOAuthService.proxyRepo != nil {
+		if p.geminiOAuthService.managedProxyResolver != nil &&
+			!p.geminiOAuthService.managedProxyResolver.DevelopmentBypass() {
+			decision, resolveErr := resolveConfiguredManagedAccount(ctx, p.geminiOAuthService.managedProxyResolver, account)
+			if resolveErr != nil {
+				return "", resolveErr
+			}
+			proxyURL = decision.ProxyURL
+		} else if account.ProxyID != nil && p.geminiOAuthService.proxyRepo != nil {
 			if proxy, err := p.geminiOAuthService.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && proxy != nil {
 				proxyURL = proxy.URL()
 			}

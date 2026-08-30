@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -22,6 +23,33 @@ var openAIPersonalAccessTokenOAuthCredentialKeys = [...]string{
 	"expires_at",
 	"expires_in",
 	"client_id",
+}
+
+func (s *OpenAIOAuthService) ValidateCodexPersonalAccessTokenForProxyID(ctx context.Context, accessToken string, proxyID *int64) (*OpenAITokenInfo, error) {
+	proxyURL := ""
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformOpenAI, AccountTypeOAuth)
+		if err != nil {
+			return nil, err
+		}
+		target, err := url.Parse(openAICodexPATWhoamiURL)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_PAT_URL_INVALID", "invalid validation URL: %v", err)
+		}
+		if err := ValidateManagedDestination(decision, target, false); err != nil {
+			return nil, err
+		}
+		proxyURL = decision.ProxyURL
+	} else if proxyID != nil && s.proxyRepo != nil {
+		proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
+		if err != nil {
+			return nil, err
+		}
+		if proxy != nil {
+			proxyURL = proxy.URL()
+		}
+	}
+	return s.ValidateCodexPersonalAccessToken(ctx, accessToken, proxyURL)
 }
 
 type openAICodexPATWhoamiResponse struct {

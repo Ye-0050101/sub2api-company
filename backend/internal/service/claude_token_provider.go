@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -60,6 +61,13 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("not an anthropic oauth or service account")
 	}
 	if account.Type == AccountTypeServiceAccount {
+		if p.oauthService != nil && p.oauthService.managedProxyResolver != nil &&
+			!p.oauthService.managedProxyResolver.DevelopmentBypass() {
+			if _, err := p.oauthService.managedProxyResolver.ResolveForAccount(ctx, account.ID); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("%w: Vertex service_account", ErrManagedEgressUnsupported)
+		}
 		return p.getServiceAccountAccessToken(ctx, account)
 	}
 
