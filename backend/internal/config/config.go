@@ -114,7 +114,7 @@ type Config struct {
 // DevelopmentBypass exists only for local debug/test processes. A release
 // process rejects it during configuration validation.
 type CompanyEgressConfig struct {
-	DevelopmentBypass bool                         `mapstructure:"development_bypass"`
+	DevelopmentBypass bool                        `mapstructure:"development_bypass"`
 	ManagedProxies    []CompanyManagedProxyConfig `mapstructure:"managed_proxies"`
 }
 

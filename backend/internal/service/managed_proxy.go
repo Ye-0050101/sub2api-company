@@ -541,7 +541,7 @@ func ValidateManagedDestination(decision ManagedProxyDecision, target *url.URL, 
 		return fmt.Errorf("%w: destination URL is invalid", ErrManagedEgressPolicy)
 	}
 	scheme := strings.ToLower(target.Scheme)
-	if scheme != "https" && !(allowWebSocket && scheme == "wss") {
+	if scheme != "https" && (!allowWebSocket || scheme != "wss") {
 		return fmt.Errorf("%w: managed destination must use HTTPS", ErrManagedEgressPolicy)
 	}
 	if port := target.Port(); port != "" && port != "443" {

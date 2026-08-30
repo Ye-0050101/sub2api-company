@@ -140,7 +140,7 @@ func (s *ClaudeUsageServiceSuite) TestFetchUsage_InvalidProxyReturnsError() {
 
 	_, err := s.fetcher.FetchUsage(context.Background(), "at", "://bad-proxy-url")
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "create http client failed")
+	require.ErrorContains(s.T(), err, "invalid proxy URL")
 }
 
 func TestClaudeUsageServiceSuite(t *testing.T) {

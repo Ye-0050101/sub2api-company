@@ -57,7 +57,8 @@ func TestResolveCompanyWebSocketProxyFailsClosed(t *testing.T) {
 }
 
 func TestOpenAIWSProxyClientUsesProjectSOCKSParser(t *testing.T) {
-	dialer := newDefaultOpenAIWSClientDialer().(*coderOpenAIWSClientDialer)
+	dialer, ok := newDefaultOpenAIWSClientDialer().(*coderOpenAIWSClientDialer)
+	require.True(t, ok)
 	client, err := dialer.proxyHTTPClient("socks5h://127.0.0.1:11001")
 	require.NoError(t, err)
 	require.NotNil(t, client)

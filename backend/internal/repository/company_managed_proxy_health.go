@@ -36,12 +36,12 @@ type managedProxyHealthState struct {
 }
 
 type companyManagedProxyHealth struct {
-	mu       sync.Mutex
-	states   map[managedProxyHealthKey]managedProxyHealthState
+	mu           sync.Mutex
+	states       map[managedProxyHealthKey]managedProxyHealthState
 	fingerprints map[int64]string
-	policies *service.ManagedProxyPolicies
-	proxies  service.ProxyRepository
-	now      func() time.Time
+	policies     *service.ManagedProxyPolicies
+	proxies      service.ProxyRepository
+	now          func() time.Time
 }
 
 // NewCompanyManagedProxyHealth performs the startup preflight. No managed

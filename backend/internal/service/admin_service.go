@@ -663,7 +663,7 @@ type adminServiceImpl struct {
 	defaultSubAssigner   DefaultSubscriptionAssigner
 	userSubRepo          UserSubscriptionRepository
 	privacyClientFactory PrivacyClientFactory
-	managedProxyResolver  ManagedProxyResolver
+	managedProxyResolver ManagedProxyResolver
 	runtimeBlocker       AccountRuntimeBlocker
 	affiliateService     adminRechargeAffiliateAccruer
 	compositeRouteRepo   CompositeModelRouteRepository
