@@ -197,7 +197,7 @@ func (h *companyManagedProxyHealth) probeAndStore(
 	epoch := previous.epoch + 1
 	h.states[key] = managedProxyHealthState{
 		status:    status,
-		exitIPv4: evidence.ipA,
+		exitIPv4:  evidence.ipA,
 		checkedAt: h.now(),
 		epoch:     epoch,
 	}
