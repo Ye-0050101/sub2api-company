@@ -33,7 +33,7 @@ jobs:
           $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'tools/company-upgrade-and-deploy.ps1'),
+            (Resolve-Path 'tools/company-update.ps1'),
             [ref]$tokens,
             [ref]$errors
           ) | Out-Null
@@ -58,20 +58,6 @@ jobs:
       - name: Integration tests
         working-directory: backend
         run: make test-integration
-      - name: Build company Linux amd64 binary
-        working-directory: backend
-        run: |
-          mkdir -p ../dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath -ldflags="-s -w -X main.Version=company-${GITHUB_SHA}" \
-            -o ../dist/sub2api-linux-amd64 ./cmd/server
-      - name: Upload verified company binary
-        uses: actions/upload-artifact@v6
-        with:
-          name: sub2api-linux-amd64-${{ github.sha }}
-          path: dist/sub2api-linux-amd64
-          if-no-files-found: error
-          retention-days: 14
 
   frontend:
     runs-on: ubuntu-latest
@@ -92,6 +78,16 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Frontend typecheck and critical vitest
         run: make test-frontend
+      - name: Build frontend for embedded website
+        working-directory: frontend
+        run: pnpm run build
+      - name: Upload embedded frontend files
+        uses: actions/upload-artifact@v7
+        with:
+          name: company-frontend-${{ github.sha }}
+          path: backend/internal/web/dist/
+          if-no-files-found: error
+          retention-days: 1
 
   golangci-lint:
     runs-on: ubuntu-latest
@@ -112,3 +108,37 @@ jobs:
           version: v2.13
           args: --timeout=30m
           working-directory: backend
+
+  company-binary:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/company/egress-v1' || startsWith(github.ref, 'refs/heads/company/upgrade-'))
+    needs: [shell, test, frontend, golangci-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download verified frontend
+        uses: actions/download-artifact@v8
+        with:
+          name: company-frontend-${{ github.sha }}
+          path: backend/internal/web/dist/
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify embedded frontend
+        run: test -s backend/internal/web/dist/index.html
+      - name: Build embedded-site Linux amd64 binary
+        working-directory: backend
+        run: |
+          mkdir -p ../dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embed \
+            -trimpath -ldflags="-s -w -X main.Version=company-${GITHUB_SHA}" \
+            -o ../dist/sub2api-linux-amd64 ./cmd/server
+      - name: Upload verified company website binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: sub2api-linux-amd64-${{ github.sha }}
+          path: dist/sub2api-linux-amd64
+          if-no-files-found: error
+          retention-days: 14

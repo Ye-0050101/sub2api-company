@@ -128,12 +128,14 @@
 
 已提供三个职责分离入口：
 
-- `tools/company-upgrade-and-deploy.ps1`
+- `tools/company-update.ps1`
   - 临时分支 merge upstream，不 rebase、不 force push
-  - 只在静态门通过后 ff-only 更新 `main` 与 `company/egress-v1`
-  - 等待 GitHub CI 与 Security Scan 全绿
-  - 下载 CI 构建的 Linux/amd64 artifact；本机不安装 Go
-  - 使用当前 Git credential 和 SSH agent，不索取或保存 PAT/私钥
+  - 先把临时升级分支推送到 GitHub；正式分支保持不变
+  - 等待临时分支 GitHub CI、Security Scan 和 embedded-site artifact 全绿
+  - 验证后才以 atomic push 更新 `main` 与 `company/egress-v1`
+  - 下载 CI 先构建前端、再以 `-tags embed` 生成的 Linux/amd64 网站 artifact；本机不安装 Go
+  - 使用当前 Git credential，不索取或保存 PAT
+  - 只操作本机仓库和 GitHub，绝不 SSH 或部署服务器
 - `deploy/company-deploy-egress.sh`
   - 校验 service 用户、路径、binary SHA、数据库备份确认和 nftables kill-switch
   - 原子替换 `/opt/sub2api/sub2api`，健康失败自动恢复旧 binary
@@ -141,12 +143,10 @@
 - `deploy/company-verify-egress.sh`
   - 只读检查 binary/config SHA、systemd、SOCKS listener、UID nftables、IPv6/DNS deny 和当前连接
 
-一键命令（当前仍禁止执行，直到数据库备份和 kernel guard 验收）：
+本机更新命令：
 
 ```powershell
-.\tools\company-upgrade-and-deploy.ps1 `
-  -UpstreamRef <OFFICIAL_TAG_OR_COMMIT> `
-  -Deploy `
-  -DatabaseBackupConfirmed `
-  -SshTarget root@<SERVER>
+.\tools\company-update.ps1 -UpstreamRef <OFFICIAL_TAG_OR_COMMIT>
 ```
+
+它只更新 GitHub 并下载经过 CI 验证的 Linux 网站 binary。上传服务器和运行 Linux 部署脚本是独立步骤。
