@@ -106,9 +106,9 @@ func (s *GrokOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, 
 		CodeChallenge: codeChallenge,
 		ClientID:      xai.EffectiveClientID(),
 		Scope:         xai.EffectiveScope(),
-		ProxyURL:    proxyURL,
-		RedirectURI: redirectURI,
-		CreatedAt:   time.Now(),
+		ProxyURL:      proxyURL,
+		RedirectURI:   redirectURI,
+		CreatedAt:     time.Now(),
 	})
 
 	return &GrokAuthURLResult{

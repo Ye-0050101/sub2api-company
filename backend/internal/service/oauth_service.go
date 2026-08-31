@@ -125,8 +125,8 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 		State:        state,
 		CodeVerifier: codeVerifier,
 		Scope:        scope,
-		ProxyURL:  proxyURL,
-		CreatedAt: time.Now(),
+		ProxyURL:     proxyURL,
+		CreatedAt:    time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 

@@ -3,20 +3,7 @@ package service
 import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
-	"github.com/redis/go-redis/v9"
 )
-
-func ProvideCompanyGrokOAuthService(
-	proxyRepo ProxyRepository,
-	oauthClient GrokOAuthClient,
-	cfg *config.Config,
-	redisClient *redis.Client,
-	resolver ManagedProxyResolver,
-) *GrokOAuthService {
-	svc := ProvideGrokOAuthService(proxyRepo, oauthClient, cfg, redisClient)
-	svc.SetManagedProxyResolver(resolver)
-	return svc
-}
 
 func ProvideCompanyOAuthService(
 	proxyRepo ProxyRepository,

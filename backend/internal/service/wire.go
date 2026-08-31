@@ -26,6 +26,20 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 	return svc
 }
 
+// ProvideCompanyGrokOAuthService stays in wire.go because this file is the
+// service layer's reviewed depguard exception for Redis session storage.
+func ProvideCompanyGrokOAuthService(
+	proxyRepo ProxyRepository,
+	oauthClient GrokOAuthClient,
+	cfg *config.Config,
+	redisClient *redis.Client,
+	resolver ManagedProxyResolver,
+) *GrokOAuthService {
+	svc := ProvideGrokOAuthService(proxyRepo, oauthClient, cfg, redisClient)
+	svc.SetManagedProxyResolver(resolver)
+	return svc
+}
+
 // BuildInfo contains build information
 type BuildInfo struct {
 	Version   string

@@ -96,9 +96,9 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		State:        state,
 		CodeVerifier: codeVerifier,
 		ClientID:     clientID,
-		RedirectURI: redirectURI,
-		ProxyURL:    proxyURL,
-		CreatedAt:   time.Now(),
+		RedirectURI:  redirectURI,
+		ProxyURL:     proxyURL,
+		CreatedAt:    time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
