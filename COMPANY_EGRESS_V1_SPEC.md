@@ -92,6 +92,8 @@ Company ProxyRepository 禁止普通 Update/Delete 修改被引用 Proxy。数�
 - generic upstream / `AccountTypeUpstream`
 - 其他未列出的 platform/type
 - 非官方 managed `base_url` 或 Anthropic `custom_base_url`
+- OpenAI Codex Personal Access Token（PAT）
+- OpenAI Agent Identity
 - 由本地插件接管 managed OpenAI OAuth 出站
 - Brave/Tavily 第三方 Web Search emulation（managed 请求保留在官方 AI 上游原生工具路径）
 
@@ -172,12 +174,13 @@ DNS fail-closed 由 application no-pre-resolution、Guard、approved resolver �
 
 - HTTP 主路径由 CompanyHTTPUpstream 忽略调用方传入的 proxy string，重新按 AccountID 解析 ProxyID，并禁用 redirect。
 - Claude Usage 即使无 TLS Profile 也必须走 CompanyHTTPUpstream。
-- Claude/OpenAI/Grok/Gemini OAuth session 固定 ProxyID；callback 提供不同 ProxyID 时拒绝。
+- Claude/OpenAI/Grok/Gemini authorization 先按 ProxyID 解析并把 canonical ProxyURL 固定到现有 session；callback 必须携带 ProxyID，且重新解析出的唯一 endpoint 必须与 session.ProxyURL 完全一致。V1 不修改四套上游 session DTO。
 - account refresh 每次重新解析 ProxyID 和 health。
 - Grok OAuth 使用固定官方 token endpoint；Grok password auth 关闭。
 - OpenAI/Grok WS 必须：`proxyurl.Parse -> proxyutil.ConfigureTransportProxy -> coderws`。
 - WS 在 dial 前重新取得 EgressDecision，不能信任 Account.Proxy 或 raw proxy URL。
-- OpenAI privacy、Codex PAT 校验、Agent Identity task 注册、Codex models manifest 均须在创建独立 client 前取得同一 managed decision。
+- OpenAI privacy 的生产 client factory 禁止空代理；Codex models manifest 在 managed 模式统一走 CompanyHTTPUpstream。
+- Codex PAT 与 Agent Identity 不进入 V1 扩展实现，在统一 managed 入口直接拒绝。
 - company enforcement 下插件不得接管 managed OpenAI HTTP/WS；可自行联网的第三方 Web Search emulation 不得执行。
 
 ## 11. Threat Model

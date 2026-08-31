@@ -9,13 +9,26 @@
 
 ## 已实现的源码面
 
+### 长期维护面
+
+相对 `a0ac9b4` 的瘦身结果：
+
+- 总差异文件：50（原实现为 59）
+- 既有 `backend/internal` / `backend/cmd` 文件接缝：29（原实现为 40）
+- 新增 company 核心/测试文件：13；这些文件不与 upstream 同路径冲突
+- 官方 `service/wire.go` 只保留 7 个 provider 名称替换
+- 官方 `config.go` 只保留 Company 字段、默认值和 release 启动检查
+- 四套 OAuth session DTO 已完全恢复官方版本；route 固定复用现有 `session.ProxyURL`
+
+升级审查以“29 个既有接缝”为准，而不是把 company 新文件和文档误算成 50 个上游冲突点。
+
 ### Company 核心
 
 - `backend/internal/service/managed_proxy.go`
   - deployment config -> immutable ProxyID policy
   - platform/type 支持矩阵
   - Proxy 不变量、class、custom base URL、destination allowlist
-  - EgressResolver 与 OAuth session ProxyID 绑定
+  - EgressResolver 与现有 OAuth session.ProxyURL 绑定，不修改上游 session DTO
 - `backend/internal/repository/company_managed_proxy_health.go`
   - startup/periodic/on-demand health
   - 双 HTTPS evidence、固定出口 IP/country、TTL、fingerprint
@@ -30,10 +43,12 @@
 
 - config：company policy 配置与 release/startup 不变量
 - DI/Wire：生产绑定 Company ProxyRepository、HTTPUpstream、Health、Resolver、OAuth providers
-- Claude/OpenAI/Grok/Gemini OAuth：authorization/callback/exchange/refresh 固定 ProxyID
+- Claude/OpenAI/Grok/Gemini OAuth：authorization 固定 canonical ProxyURL；callback ProxyID 必填且 endpoint 必须与 session 一致；refresh 按账号重新解析
 - Claude Usage：移除无 TLS profile 时的 direct-capable client fallback
 - OpenAI quota/usage：进入网络前解析 route
-- OpenAI privacy（Admin 与 refresh 后处理）、Codex PAT、Agent Identity、Codex models manifest：独立 client 前解析 route
+- OpenAI privacy：生产 factory 禁止空代理；不再向 Admin/TokenRefresh 注入 resolver
+- Codex models manifest：managed 模式走 CompanyHTTPUpstream
+- Codex PAT / Agent Identity：V1 统一入口 UNSUPPORTED，不再深入修改其内部实现
 - Account Usage：统一 route/health gate，Antigravity 在网络前拒绝
 - Account Test：HTTP 与 realtime WS 使用 company decision
 - OpenAI/Grok WS：统一项目 proxy parser/transport
@@ -72,7 +87,7 @@
 
 - 不新增 EgressRoute 表或 `route.enabled`
 - 不生成 migration
-- 不实现 Antigravity、Grok password/captcha、Gemini Batch、Vertex、Bedrock、Ollama、generic upstream、managed 第三方 Web Search emulation
+- 不实现 Antigravity、Grok password/captcha、Gemini Batch、Vertex、Bedrock、Ollama、generic upstream、Codex PAT、Agent Identity、managed 第三方 Web Search emulation
 - 不编辑 sing-box、systemd、nftables、DNS 或 IPv6
 - 不录入部署环境 ProxyID/固定出口 IPv4
 - 不宣称 kernel guard 已存在

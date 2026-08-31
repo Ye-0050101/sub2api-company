@@ -24,15 +24,11 @@ PROTECTED_FILES = (
     "backend/internal/service/account_usage_service.go",
     "backend/internal/service/openai_quota_service.go",
     "backend/internal/service/account_test_service.go",
-	"backend/internal/service/admin_account.go",
-	"backend/internal/service/token_refresh_service.go",
-	"backend/internal/service/openai_agent_identity.go",
-	"backend/internal/service/openai_codex_pat_service.go",
-    "backend/internal/service/openai_alpha_search.go",
-	"backend/internal/handler/admin/openai_oauth_handler.go",
-	"backend/internal/service/openai_codex_models_service.go",
-	"backend/internal/service/openai_plugin_transport.go",
-	"backend/internal/service/gateway_websearch_emulation.go",
+    "backend/internal/service/openai_codex_account_identity.go",
+    "backend/internal/service/openai_codex_pat_service.go",
+    "backend/internal/service/openai_codex_models_service.go",
+    "backend/internal/service/openai_plugin_transport.go",
+    "backend/internal/service/gateway_websearch_emulation.go",
     "backend/internal/repository/company_http_upstream.go",
     "backend/internal/repository/company_managed_proxy_health.go",
     "backend/internal/repository/claude_usage_service.go",
@@ -72,11 +68,14 @@ REQUIRED_SOURCE = {
         "repository.NewCompanyManagedProxyHealth(",
         "repository.NewCompanyProxyRepository(",
         "service.ProvideCompanyOAuthService(",
+        "service.ProvideCompanyOpenAIOAuthService(",
+        "service.ProvideCompanyGrokOAuthService(",
         "service.ProvideCompanyAntigravityOAuthService(",
         "service.ProvideCompanyGeminiOAuthService(",
-		"service.ProvideCompanyAdminService(",
-		"service.ProvideTokenRefreshService(",
+        "service.ProvideCompanyOpenAIQuotaService(",
+        "service.ProvideCompanyAccountUsageService(",
         "repository.ProvideCompanyGrokOAuthClient(",
+        "repository.CreateCompanyPrivacyReqClient",
     ),
     "backend/internal/repository/company_managed_proxy_health.go": (
         'companyProbeAURL      = "https://api.ipify.org?format=json"',
@@ -90,28 +89,40 @@ REQUIRED_SOURCE = {
         "proxyurl.Parse(proxyURL)",
         "proxyutil.ConfigureTransportProxy(transport, parsed)",
     ),
-	"backend/internal/service/openai_agent_identity.go": (
-		"ResolveManagedProxyForURL(",
-		"s.managedProxyResolver",
-	),
-	"backend/internal/service/openai_codex_pat_service.go": (
-		"ValidateCodexPersonalAccessTokenForProxyID(",
-		"resolveConfiguredManagedProxyID(",
-		"ValidateManagedDestination(",
-	),
-	"backend/internal/handler/admin/openai_oauth_handler.go": (
-		"ValidateCodexPersonalAccessTokenForProxyID(",
-	),
-	"backend/internal/service/openai_codex_models_service.go": (
-		"ResolveManagedProxyForURL(",
-		"!request.managedEgress",
-	),
-	"backend/internal/service/openai_plugin_transport.go": (
-		"!managedEgress",
-	),
-	"backend/internal/service/gateway_websearch_emulation.go": (
-		"s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass()",
-	),
+    "backend/internal/service/managed_proxy.go": (
+        "OpenAI PAT and Agent Identity are outside Company Egress V1",
+    ),
+    "backend/internal/service/openai_codex_account_identity.go": (
+        "resolveConfiguredManagedAccount(",
+    ),
+    "backend/internal/service/account_test_service.go": (
+        "s.managedProxyResolver.ResolveForAccount(",
+        "resolveCompanyWebSocketProxy(",
+    ),
+    "backend/internal/service/account_usage_service.go": (
+        "s.managedProxyResolver.ResolveForAccount(",
+        "s.httpUpstream.Do(",
+    ),
+    "backend/internal/service/openai_quota_service.go": (
+        "resolveConfiguredManagedAccount(",
+    ),
+    "backend/internal/service/upstream_models.go": (
+        "s.managedProxyResolver.ResolveForAccount(",
+    ),
+    "backend/internal/service/openai_codex_pat_service.go": (
+        "OpenAI Codex PAT",
+        "ErrManagedEgressUnsupported",
+    ),
+    "backend/internal/service/openai_codex_models_service.go": (
+        "ValidateManagedDestination(",
+        "request.useAPIKeyUpstream || request.managedEgress",
+    ),
+    "backend/internal/service/openai_plugin_transport.go": (
+        "!managedEgress",
+    ),
+    "backend/internal/service/gateway_websearch_emulation.go": (
+        "len(s.cfg.CompanyEgress.ManagedProxies) > 0",
+    ),
 }
 
 FORBIDDEN_WIRING = (
@@ -119,6 +130,7 @@ FORBIDDEN_WIRING = (
     "repository.NewProxyRepository(client, db)",
     "repository.NewGrokOAuthClient()",
     "service.NewAntigravityOAuthService(proxyRepository)",
+    "return repository.CreatePrivacyReqClient",
 )
 
 

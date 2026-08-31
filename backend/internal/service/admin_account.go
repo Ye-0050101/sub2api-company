@@ -1584,15 +1584,8 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		return ""
 	}
 
-	proxyURL := ""
-	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
-		if err != nil {
-			logger.LegacyPrintf("service.admin", "ensure_openai_privacy_egress_rejected: account_id=%d err=%v", account.ID, err)
-			return ""
-		}
-		proxyURL = decision.ProxyURL
-	} else if account.ProxyID != nil {
+	var proxyURL string
+	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
 			proxyURL = p.URL()
 		}
@@ -1625,15 +1618,8 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		return ""
 	}
 
-	proxyURL := ""
-	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		decision, err := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
-		if err != nil {
-			logger.LegacyPrintf("service.admin", "force_openai_privacy_egress_rejected: account_id=%d err=%v", account.ID, err)
-			return ""
-		}
-		proxyURL = decision.ProxyURL
-	} else if account.ProxyID != nil {
+	var proxyURL string
+	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
 			proxyURL = p.URL()
 		}

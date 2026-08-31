@@ -405,7 +405,6 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	if account.Type != AccountTypeOAuth {
 		return "", "", "", false, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_INVALID_TYPE", "account is not an OAuth account")
 	}
-
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
 		decision, resolveErr := resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
 		if resolveErr != nil {
@@ -475,7 +474,6 @@ func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accou
 	if err != nil || account == nil {
 		return fmt.Errorf("account is unavailable")
 	}
-	requestedAccount := account
 	if account.IsShadow() {
 		account, err = resolveCredentialAccount(ctx, s.accountRepo, account)
 		if err != nil || account == nil {
@@ -485,7 +483,7 @@ func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accou
 	if !account.IsOpenAIAgentIdentity() {
 		return nil
 	}
-	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, requestedAccount, expectedTaskID, s.managedProxyResolver)
+	return ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, expectedTaskID)
 }
 
 func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, accountID int64) bool {
@@ -517,7 +515,6 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 		}
 		return headers, "", nil
 	}
-	requestedAccount := account
 	if account.IsShadow() {
 		if resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account); resolveErr == nil && resolved != nil {
 			account = resolved
@@ -528,15 +525,8 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil
 	}
-	if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, requestedAccount, "", s.managedProxyResolver); err != nil {
+	if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, account, ""); err != nil {
 		return nil, "", err
-	}
-	if requestedAccount.IsShadow() {
-		resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, requestedAccount)
-		if resolveErr != nil || resolved == nil {
-			return nil, "", fmt.Errorf("agent identity shadow credentials are unavailable")
-		}
-		account = resolved
 	}
 	key, err := agentIdentityKeyFromAccount(account)
 	if err != nil {

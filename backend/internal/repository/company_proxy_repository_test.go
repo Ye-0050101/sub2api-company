@@ -38,8 +38,8 @@ func TestCompanyProxyRepositoryProtectsManagedProxy(t *testing.T) {
 	raw := &companyRawProxyRepositoryStub{}
 	repo := NewCompanyProxyRepository(RawProxyRepository{ProxyRepository: raw}, policies)
 
-	require.ErrorIs(t, repo.Update(t.Context(), &service.Proxy{ID: 7}), service.ErrManagedProxyReadOnly)
-	require.ErrorIs(t, repo.Delete(t.Context(), 7), service.ErrManagedProxyReadOnly)
+	require.ErrorIs(t, repo.Update(t.Context(), &service.Proxy{ID: 7}), ErrCompanyManagedProxyReadOnly)
+	require.ErrorIs(t, repo.Delete(t.Context(), 7), ErrCompanyManagedProxyReadOnly)
 	require.Zero(t, raw.updateCalls)
 	require.Zero(t, raw.deleteCalls)
 

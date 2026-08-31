@@ -386,7 +386,19 @@ func (h *OpenAIOAuthHandler) CreateAccountFromCodexPAT(c *gin.Context) {
 		return
 	}
 
-	tokenInfo, err := h.openaiOAuthService.ValidateCodexPersonalAccessTokenForProxyID(c.Request.Context(), req.AccessToken, req.ProxyID)
+	var proxyURL string
+	if req.ProxyID != nil {
+		proxy, err := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if proxy != nil {
+			proxyURL = proxy.URL()
+		}
+	}
+
+	tokenInfo, err := h.openaiOAuthService.ValidateCodexPersonalAccessToken(c.Request.Context(), req.AccessToken, proxyURL)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

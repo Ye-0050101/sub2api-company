@@ -150,12 +150,6 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	session := &geminicli.OAuthSession{
 		State:        state,
 		CodeVerifier: codeVerifier,
-		ProxyID: func() int64 {
-			if proxyID == nil {
-				return 0
-			}
-			return *proxyID
-		}(),
 		ProxyURL:    proxyURL,
 		RedirectURI: redirectURI,
 		ProjectID:   strings.TrimSpace(projectID),
@@ -481,11 +475,7 @@ func (s *GeminiOAuthService) ExchangeCode(ctx context.Context, input *GeminiExch
 
 	proxyURL := session.ProxyURL
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
-		if err != nil {
-			return nil, err
-		}
-		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformGemini, AccountTypeOAuth)
+		decision, err := managedOAuthCallbackDecision(ctx, s.managedProxyResolver, session.ProxyURL, input.ProxyID, PlatformGemini, AccountTypeOAuth)
 		if err != nil {
 			return nil, err
 		}

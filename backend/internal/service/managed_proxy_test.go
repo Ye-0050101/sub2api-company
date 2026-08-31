@@ -181,6 +181,30 @@ func TestManagedProxyResolverRejectsUnsupportedAndSoftDeletedProxy(t *testing.T)
 	require.ErrorIs(t, err, ErrManagedEgressPolicy)
 }
 
+func TestManagedProxyResolverRejectsOpenAIEdgeAuthModes(t *testing.T) {
+	proxyID := int64(7)
+	for _, mode := range []string{OpenAIAuthModePersonalAccessToken, OpenAIAuthModeAgentIdentity} {
+		account := &Account{
+			ID:          10,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			ProxyID:     &proxyID,
+			Credentials: map[string]any{openAIAuthModeCredentialKey: mode},
+		}
+		policies, err := NewManagedProxyPolicies(managedProxyConfig(proxyID))
+		require.NoError(t, err)
+		resolver, err := NewManagedProxyResolver(
+			&managedAccountRepositoryStub{accounts: map[int64]*Account{account.ID: account}},
+			&managedProxyRepositoryStub{proxies: map[int64]*Proxy{proxyID: validManagedProxy(proxyID)}},
+			policies,
+			&managedProxyHealthStub{epoch: 1},
+		)
+		require.NoError(t, err)
+		_, err = resolver.ResolveForAccount(t.Context(), account.ID)
+		require.ErrorIs(t, err, ErrManagedEgressUnsupported, mode)
+	}
+}
+
 func TestValidateManagedDestinationExactHTTPSOnly(t *testing.T) {
 	decision := ManagedProxyDecision{Platform: PlatformOpenAI}
 	for _, raw := range []string{
@@ -229,14 +253,27 @@ func TestManagedCustomBaseURLPolicy(t *testing.T) {
 	)
 }
 
-func TestManagedOAuthSessionProxyIDMismatchFailsClosed(t *testing.T) {
-	proxyID := int64(8)
-	_, err := managedOAuthSessionProxyID(7, &proxyID)
+func TestManagedOAuthCallbackRequiresProxyID(t *testing.T) {
+	_, err := managedOAuthCallbackDecision(t.Context(), nil, "socks5h://127.0.0.1:11001", nil, PlatformOpenAI, AccountTypeOAuth)
 	require.ErrorIs(t, err, ErrManagedEgressPolicy)
 
-	resolved, err := managedOAuthSessionProxyID(7, nil)
+	proxyID := int64(7)
+	policies, err := NewManagedProxyPolicies(managedProxyConfig(proxyID))
 	require.NoError(t, err)
-	require.Equal(t, int64(7), *resolved)
+	resolver, err := NewManagedProxyResolver(
+		&managedAccountRepositoryStub{accounts: map[int64]*Account{}},
+		&managedProxyRepositoryStub{proxies: map[int64]*Proxy{proxyID: validManagedProxy(proxyID)}},
+		policies,
+		&managedProxyHealthStub{epoch: 1},
+	)
+	require.NoError(t, err)
+
+	_, err = managedOAuthCallbackDecision(t.Context(), resolver, "socks5h://127.0.0.1:12001", &proxyID, PlatformOpenAI, AccountTypeOAuth)
+	require.ErrorIs(t, err, ErrManagedEgressPolicy)
+
+	decision, err := managedOAuthCallbackDecision(t.Context(), resolver, "socks5h://127.0.0.1:11001", &proxyID, PlatformOpenAI, AccountTypeOAuth)
+	require.NoError(t, err)
+	require.Equal(t, proxyID, decision.ProxyID)
 }
 
 func TestCanonicalPublicIPv4(t *testing.T) {

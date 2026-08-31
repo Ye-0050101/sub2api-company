@@ -96,12 +96,6 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 		State:        state,
 		CodeVerifier: codeVerifier,
 		ClientID:     clientID,
-		ProxyID: func() int64 {
-			if proxyID == nil {
-				return 0
-			}
-			return *proxyID
-		}(),
 		RedirectURI: redirectURI,
 		ProxyURL:    proxyURL,
 		CreatedAt:   time.Now(),
@@ -161,11 +155,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 
 	proxyURL := session.ProxyURL
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
-		if err != nil {
-			return nil, err
-		}
-		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformOpenAI, AccountTypeOAuth)
+		decision, err := managedOAuthCallbackDecision(ctx, s.managedProxyResolver, session.ProxyURL, input.ProxyID, PlatformOpenAI, AccountTypeOAuth)
 		if err != nil {
 			return nil, err
 		}

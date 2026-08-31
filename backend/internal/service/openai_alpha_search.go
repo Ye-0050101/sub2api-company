@@ -55,13 +55,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 
 	proxyURL := ""
-	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		decision, err := ResolveManagedProxyForURL(ctx, s.managedProxyResolver, account, openAICodexPATWhoamiURL, "", false)
-		if err != nil {
-			return nil, err
-		}
-		proxyURL = decision.ProxyURL
-	} else if account.ProxyID != nil && account.Proxy != nil {
+	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	if err := s.ensureOpenAIAlphaSearchAuthMetadata(ctx, account, token, proxyURL); err != nil {

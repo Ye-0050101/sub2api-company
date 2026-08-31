@@ -111,15 +111,25 @@ func resolveConfiguredManagedAccount(
 	return resolver.ResolveForAccount(ctx, account.ID)
 }
 
-func managedOAuthSessionProxyID(sessionProxyID int64, supplied *int64) (*int64, error) {
-	if sessionProxyID <= 0 {
-		return nil, fmt.Errorf("%w: OAuth session has no proxy_id", ErrManagedEgressPolicy)
+func managedOAuthCallbackDecision(
+	ctx context.Context,
+	resolver ManagedProxyResolver,
+	sessionProxyURL string,
+	suppliedProxyID *int64,
+	platform string,
+	accountType string,
+) (ManagedProxyDecision, error) {
+	if suppliedProxyID == nil || *suppliedProxyID <= 0 {
+		return ManagedProxyDecision{}, fmt.Errorf("%w: OAuth callback proxy_id is required", ErrManagedEgressPolicy)
 	}
-	if supplied != nil && *supplied != sessionProxyID {
-		return nil, fmt.Errorf("%w: OAuth callback proxy_id does not match the session", ErrManagedEgressPolicy)
+	decision, err := resolveConfiguredManagedProxyID(ctx, resolver, suppliedProxyID, platform, accountType)
+	if err != nil {
+		return ManagedProxyDecision{}, err
 	}
-	value := sessionProxyID
-	return &value, nil
+	if strings.TrimSpace(sessionProxyURL) == "" || strings.TrimSpace(sessionProxyURL) != decision.ProxyURL {
+		return ManagedProxyDecision{}, fmt.Errorf("%w: OAuth callback proxy does not match the session", ErrManagedEgressPolicy)
+	}
+	return decision, nil
 }
 
 func normalizeManagedProxyPolicy(raw config.CompanyManagedProxyConfig) (ManagedProxyPolicy, error) {
@@ -414,6 +424,9 @@ func managedClassForAccount(account *Account) (string, error) {
 	case PlatformAnthropic:
 		supported = account.Type == AccountTypeOAuth || account.Type == AccountTypeSetupToken || account.Type == AccountTypeAPIKey
 	case PlatformOpenAI:
+		if account.IsOpenAIPersonalAccessToken() || account.IsOpenAIAgentIdentity() {
+			return "", fmt.Errorf("%w: OpenAI PAT and Agent Identity are outside Company Egress V1", ErrManagedEgressUnsupported)
+		}
 		supported = account.Type == AccountTypeOAuth || account.Type == AccountTypeSetupToken || account.Type == AccountTypeAPIKey
 	case PlatformGrok:
 		supported = account.Type == AccountTypeOAuth || account.Type == AccountTypeAPIKey

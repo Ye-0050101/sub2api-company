@@ -107,24 +107,6 @@ type Config struct {
 	CompanyEgress           CompanyEgressConfig           `mapstructure:"company_egress"`
 }
 
-// CompanyEgressConfig is the deployment-owned policy for deterministic
-// account egress. It deliberately keys policy by the existing Proxy ID so the
-// company fork does not need a second route table or a database migration.
-//
-// DevelopmentBypass exists only for local debug/test processes. A release
-// process rejects it during configuration validation.
-type CompanyEgressConfig struct {
-	DevelopmentBypass bool                        `mapstructure:"development_bypass"`
-	ManagedProxies    []CompanyManagedProxyConfig `mapstructure:"managed_proxies"`
-}
-
-type CompanyManagedProxyConfig struct {
-	ProxyID          int64  `mapstructure:"proxy_id"`
-	Class            string `mapstructure:"class"`
-	CountryCode      string `mapstructure:"country_code"`
-	ExpectedExitIPv4 string `mapstructure:"expected_exit_ipv4"`
-}
-
 // PluginConfig 控制管理员手动上传的本地进程插件。
 // 默认不包含插件，也不允许安装未签名插件；TrustedPublishers 用于追加第三方发布者。
 type PluginConfig struct {

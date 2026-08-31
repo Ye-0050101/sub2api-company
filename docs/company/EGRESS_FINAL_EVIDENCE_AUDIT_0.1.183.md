@@ -25,7 +25,7 @@
 | Claude Usage 曾有 nil TLS direct-capable fallback | Usage 可绕过 | 两种 profile 都走 CompanyHTTPUpstream |
 | OpenAI/Grok WS 独立 dial | raw parser/Account.Proxy 可绕过 | resolver + proxyurl + proxyutil + coderws |
 | Grok OAuth 使用 raw proxy parser | policy normalization 被绕过 | 统一 proxyurl/proxyutil |
-| OpenAI privacy/PAT/models/Agent Identity 使用独立 client | Account.Proxy 缺失可形成空代理 | 每次出站前按 ProxyID/health/destination 解析 |
+| OpenAI privacy/models 使用独立 client；PAT/Agent Identity 属边缘认证 | 空代理或扩大 patch 面 | privacy factory 禁止空代理；models 走 wrapper；PAT/Agent Identity UNSUPPORTED |
 | OpenAI 插件与第三方 Web Search 可自行联网 | caller proxy 不是可强制边界 | managed 插件接管与 Web Search emulation 禁止 |
 | Antigravity/Vertex/Batch 有独立 client | 扩大修改面且未审计 | V1 UNSUPPORTED，启动/入口前置拒绝 |
 
@@ -60,7 +60,7 @@ READY 必须同时满足：
 
 支持：Claude、OpenAI/Codex、Grok、Gemini ordinary、DeepSeek、Kimi、Zhipu 的已列账号类型与 OAuth/Refresh/Usage/Test/WS。
 
-不支持：Antigravity、Grok password/captcha、Gemini/Vertex Batch、Vertex service account/GCS、Bedrock、Ollama Cloud、generic upstream、custom relay、managed 插件接管、managed 第三方 Web Search emulation。
+不支持：Antigravity、Grok password/captcha、Gemini/Vertex Batch、Vertex service account/GCS、Bedrock、Ollama Cloud、generic upstream、custom relay、Codex PAT、Agent Identity、managed 插件接管、managed 第三方 Web Search emulation。
 
 ## Threat-model evidence
 

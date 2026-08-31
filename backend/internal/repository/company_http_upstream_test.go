@@ -18,6 +18,11 @@ type companyResolverStub struct {
 	bypass   bool
 }
 
+func TestCompanyPrivacyClientRejectsEmptyProxy(t *testing.T) {
+	_, err := CreateCompanyPrivacyReqClient("")
+	require.Error(t, err)
+}
+
 func (s *companyResolverStub) ResolveForAccount(context.Context, int64) (service.ManagedProxyDecision, error) {
 	return s.decision, s.err
 }

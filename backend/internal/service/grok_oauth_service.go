@@ -106,12 +106,6 @@ func (s *GrokOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, 
 		CodeChallenge: codeChallenge,
 		ClientID:      xai.EffectiveClientID(),
 		Scope:         xai.EffectiveScope(),
-		ProxyID: func() int64 {
-			if proxyID == nil {
-				return 0
-			}
-			return *proxyID
-		}(),
 		ProxyURL:    proxyURL,
 		RedirectURI: redirectURI,
 		CreatedAt:   time.Now(),
@@ -186,14 +180,11 @@ func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchange
 
 	proxyURL := session.ProxyURL
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
+		decision, err := managedOAuthCallbackDecision(ctx, s.managedProxyResolver, session.ProxyURL, input.ProxyID, PlatformGrok, AccountTypeOAuth)
 		if err != nil {
 			return nil, err
 		}
-		proxyURL, err = s.proxyURL(ctx, proxyID)
-		if err != nil {
-			return nil, err
-		}
+		proxyURL = decision.ProxyURL
 	} else if input.ProxyID != nil {
 		var err error
 		proxyURL, err = s.proxyURL(ctx, input.ProxyID)

@@ -235,6 +235,15 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	if account == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_ACCOUNT_REQUIRED", "account is required")
 	}
+	managedEgress := s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass()
+	managedDecision := ManagedProxyDecision{}
+	if managedEgress {
+		var resolveErr error
+		managedDecision, resolveErr = resolveConfiguredManagedAccount(ctx, s.managedProxyResolver, account)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+	}
 	credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", err)
@@ -286,13 +295,18 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		}
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "parse codex models request URL: %v", err)
 	}
+	if managedEgress {
+		if err := ValidateManagedDestination(managedDecision, requestURL, false); err != nil {
+			return nil, err
+		}
+	}
 
 	headers := make(http.Header)
 	if useAPIKeyUpstream {
 		headers.Set("Authorization", "Bearer "+authToken)
 		credAccount.ApplyHeaderOverrides(headers)
 	} else {
-		authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, account, authToken)
+		authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, credAccount, authToken)
 		if authErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_AUTH_FAILED", "build Codex models authentication: %v", authErr)
 		}
@@ -322,13 +336,8 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	headers.Set("Version", headerVersion)
 
 	proxyURL := ""
-	managedEgress := s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass()
 	if managedEgress {
-		decision, decisionErr := ResolveManagedProxyForURL(ctx, s.managedProxyResolver, account, requestURL.String(), "", false)
-		if decisionErr != nil {
-			return nil, decisionErr
-		}
-		proxyURL = decision.ProxyURL
+		proxyURL = managedDecision.ProxyURL
 	} else if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
@@ -353,10 +362,10 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		return manifest, fetchErr
 	}
 	expectedTaskID := strings.TrimSpace(credAccount.GetCredential("task_id"))
-	if recoverErr := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); recoverErr != nil {
+	if recoverErr := s.recoverAgentIdentityTask(ctx, credAccount, expectedTaskID); recoverErr != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_AUTH_FAILED", "agent identity task recovery failed: %v", recoverErr)
 	}
-	authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, account, "")
+	authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, credAccount, "")
 	if authErr != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_AUTH_FAILED", "build Codex models authentication after task recovery: %v", authErr)
 	}
@@ -471,7 +480,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 	}
 
 	var resp *http.Response
-	if request.useAPIKeyUpstream {
+	if request.useAPIKeyUpstream || request.managedEgress {
 		if s.httpUpstream == nil {
 			return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED", "Codex models upstream HTTP client is not configured")
 		}
@@ -479,7 +488,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
 	} else {
 		handled := false
-		if s.pluginManager != nil && !request.managedEgress {
+		if s.pluginManager != nil {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)
 		}
 		if !handled {

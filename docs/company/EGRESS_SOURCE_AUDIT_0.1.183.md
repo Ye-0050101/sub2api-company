@@ -37,7 +37,7 @@ Independent paths
 | 平台 | Inference | OAuth/Exchange | Refresh | Usage/Quota | Test | WS |
 |---|---|---|---|---|---|---|
 | Claude | CompanyHTTPUpstream | route-aware Claude client | account route | CompanyHTTPUpstream，含 nil TLS profile | CompanyHTTPUpstream | N/A |
-| OpenAI/Codex | CompanyHTTPUpstream；models/Agent Identity 独立 client 先解析 route | session ProxyID + route；PAT 校验先解析 ProxyID | account route | resolver + quota/privacy client | CompanyHTTPUpstream | route-aware parser/transport/coderws |
+| OpenAI/Codex | CompanyHTTPUpstream；models manifest 同样走 wrapper | session.ProxyURL + callback ProxyID endpoint 一致性；PAT UNSUPPORTED | account route | resolver + quota；privacy factory 禁止空代理 | CompanyHTTPUpstream | route-aware parser/transport/coderws；Agent Identity UNSUPPORTED |
 | Grok | CompanyHTTPUpstream | fixed endpoint + route | account route | CompanyHTTPUpstream | HTTP/route-aware realtime | route-aware parser/transport/coderws |
 | Gemini ordinary | CompanyHTTPUpstream | session ProxyID + route | account route | local quota或 route-aware Drive/Code Assist | CompanyHTTPUpstream | N/A |
 | DeepSeek/Kimi/Zhipu | CompanyHTTPUpstream / CN_DIRECT | N/A | N/A | CompanyHTTPUpstream | CompanyHTTPUpstream | N/A |
@@ -140,7 +140,7 @@ Account.ProxyID 必须精确匹配 policy ProxyID；shadow account 与 parent Pr
 
 - provider OAuth/refresh client
 - OpenAI/Grok WebSocket
-- OpenAI privacy/quota、Codex PAT/models、Agent Identity 独立 client
+- OpenAI privacy/quota、Codex models 独立 client；PAT/Agent Identity 前置拒绝
 - Antigravity、Vertex service account、Batch/GCS
 - websearch、payments、email、third-party login、release/pricing 等非账号功能
 

@@ -52,6 +52,8 @@ Account.ProxyID -> Account.Proxy -> Proxy.URL() -> HTTPUpstream
 - Ollama Cloud
 - generic upstream
 - managed custom relay/base URL
+- OpenAI Codex PAT
+- OpenAI Agent Identity
 - managed OpenAI plugin takeover
 - managed third-party Web Search emulation
 

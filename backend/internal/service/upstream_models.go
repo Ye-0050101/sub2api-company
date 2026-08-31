@@ -78,6 +78,11 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
+	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
+		if _, err := s.managedProxyResolver.ResolveForAccount(ctx, account.ID); err != nil {
+			return nil, newUpstreamModelSyncUnsupportedError("Company egress rejected this account", err)
+		}
+	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
@@ -410,8 +415,7 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 			s.accountRepo,
 			s.agentIdentityWS,
 			&s.agentIdentityTaskMu,
-			account,
-			s.managedProxyResolver,
+			credentialAccount,
 		)
 		if authErr != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to build OpenAI Agent Identity authentication", authErr)

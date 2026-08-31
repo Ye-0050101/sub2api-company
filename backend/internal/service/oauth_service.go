@@ -125,12 +125,6 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 		State:        state,
 		CodeVerifier: codeVerifier,
 		Scope:        scope,
-		ProxyID: func() int64 {
-			if proxyID == nil {
-				return 0
-			}
-			return *proxyID
-		}(),
 		ProxyURL:  proxyURL,
 		CreatedAt: time.Now(),
 	}
@@ -177,15 +171,11 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, input *ExchangeCodeInpu
 	// when the session was created.
 	proxyURL := session.ProxyURL
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
-		proxyID, err := managedOAuthSessionProxyID(session.ProxyID, input.ProxyID)
-		if err != nil {
-			return nil, err
-		}
 		accountType := AccountTypeOAuth
 		if session.Scope == oauth.ScopeInference {
 			accountType = AccountTypeSetupToken
 		}
-		decision, err := resolveConfiguredManagedProxyID(ctx, s.managedProxyResolver, proxyID, PlatformAnthropic, accountType)
+		decision, err := managedOAuthCallbackDecision(ctx, s.managedProxyResolver, session.ProxyURL, input.ProxyID, PlatformAnthropic, accountType)
 		if err != nil {
 			return nil, err
 		}
