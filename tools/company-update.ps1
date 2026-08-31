@@ -93,11 +93,10 @@ $distDir = Join-Path $repoRoot 'dist/company'
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 $zipPath = Join-Path $distDir "$artifactName.zip"
 $extractDir = Join-Path $distDir $artifactName
-$redirect = Invoke-WebRequest -Headers $headers -Uri $artifact.archive_download_url -MaximumRedirection 0 -SkipHttpErrorCheck
-if ($redirect.StatusCode -notin 301, 302, 303, 307, 308 -or -not $redirect.Headers.Location) {
-    throw 'GitHub did not return a temporary artifact download URL.'
-}
-Invoke-WebRequest -Uri $redirect.Headers.Location -OutFile $zipPath
+# Invoke-WebRequest does not preserve Authorization on a cross-host redirect
+# unless -PreserveAuthorizationOnRedirect is explicitly supplied. Follow the
+# GitHub -> temporary blob redirect without forwarding the GitHub credential.
+Invoke-WebRequest -Headers $headers -Uri $artifact.archive_download_url -OutFile $zipPath -MaximumRedirection 5
 if (Test-Path -LiteralPath $extractDir) { Remove-Item -LiteralPath $extractDir -Recurse -Force }
 Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir
 $binaryPath = Join-Path $extractDir 'sub2api-linux-amd64'
