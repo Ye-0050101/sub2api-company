@@ -105,6 +105,7 @@ Batch Image 的 `enabled`、`queue_enabled` 或 `vertex_enabled` 在 company enf
 - Claude/OpenAI/Grok/Gemini -> `INTERNATIONAL_PROXY`
 - DeepSeek/Kimi/Zhipu -> `CN_DIRECT`
 - `CN_DIRECT.country_code == CN`
+- `INTERNATIONAL_PROXY.country_code` 只允许 `US`、`SG`、`JP`、`KR`
 
 CN-DIRECT 仍使用内部 socks5h endpoint 进入 sing-box-cn，再由服务器直出；Sub2API 进程本身不获得 unrestricted public direct egress。
 
@@ -134,10 +135,13 @@ RouteHealth 是 runtime 状态，不新增数据库字段：
 - `READY_DISASTER`
 - `UNHEALTHY`
 
-唯一编译期探针：
+唯一编译期探针按 route class 固定：
 
-- Probe A：`https://api.ipify.org?format=json`，只提供 IPv4 evidence
-- Probe B：`https://cloudflare.com/cdn-cgi/trace`，提供 IPv4 和 `loc`
+- `INTERNATIONAL_PROXY` Probe A：`https://api.ipify.org?format=json`，JSON IPv4 evidence
+- `CN_DIRECT` Probe A：`https://api-ipv4.ip.sb/ip`，plain-text IPv4 evidence
+- 所有 class 的 Probe B：`https://cloudflare.com/cdn-cgi/trace`，提供 IPv4 和 `loc`
+
+CN 专用 Probe A 是因最终中国服务器无法连接 ipify，而 IP.SB 与 Cloudflare 均实测返回相同固定 IPv4 `47.107.65.183`、Cloudflare `loc=CN`。这不是运行时 fallback；每个 class 只有一个编译期 Probe A。
 
 约束：
 
@@ -148,6 +152,7 @@ RouteHealth 是 runtime 状态，不新增数据库字段：
 - body 上限 16 KiB
 - 不允许管理员修改
 - 不回退到上游默认 HTTP probes
+- 不在运行时跨 class 或跨 provider fallback
 
 READY 条件：
 
@@ -200,7 +205,7 @@ DNS fail-closed 由 application no-pre-resolution、Guard、approved resolver �
 - no unintended IPv6
 - no direct DNS
 
-Linux kernel 不知道 Account identity，不能单独强制 US account 只能访问 US SOCKS、SG account 只能访问 SG SOCKS。per-account 地理选择是应用不变量：
+Linux kernel 不知道 Account identity，不能单独强制 US/SG/JP/KR account 只能访问对应国家 SOCKS。per-account 地理选择是应用不变量：
 
 `ProxyID policy + immutable decision + route-aware factories + static CI + tests`。
 

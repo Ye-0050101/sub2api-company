@@ -42,7 +42,8 @@
 
 编译期唯一 endpoint：
 
-- `https://api.ipify.org?format=json`
+- `INTERNATIONAL_PROXY`：`https://api.ipify.org?format=json`
+- `CN_DIRECT`：`https://api-ipv4.ip.sb/ip`
 - `https://cloudflare.com/cdn-cgi/trace`
 
 READY 必须同时满足：

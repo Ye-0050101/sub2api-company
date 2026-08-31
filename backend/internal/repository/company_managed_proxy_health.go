@@ -16,11 +16,19 @@ import (
 )
 
 const (
-	companyProbeAURL      = "https://api.ipify.org?format=json"
-	companyProbeBURL      = "https://cloudflare.com/cdn-cgi/trace"
-	companyProbeTimeout   = 10 * time.Second
-	companyProbeBodyLimit = int64(16 * 1024)
-	companyProbeUserAgent = "sub2api-company-egress-health/1"
+	companyProbeAInternationalURL = "https://api.ipify.org?format=json"
+	companyProbeACNURL            = "https://api-ipv4.ip.sb/ip"
+	companyProbeBURL              = "https://cloudflare.com/cdn-cgi/trace"
+	companyProbeTimeout           = 10 * time.Second
+	companyProbeBodyLimit         = int64(16 * 1024)
+	companyProbeUserAgent         = "sub2api-company-egress-health/1"
+)
+
+type companyProbeAFormat uint8
+
+const (
+	companyProbeAJSON companyProbeAFormat = iota
+	companyProbeAPlainIPv4
 )
 
 type managedProxyHealthKey struct {
@@ -181,7 +189,7 @@ func (h *companyManagedProxyHealth) probeAndStore(
 	fingerprint string,
 ) (service.ManagedProxyHealthResult, error) {
 	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}
-	evidence, err := probeCompanyManagedExit(ctx, proxy.URL())
+	evidence, err := probeCompanyManagedExit(ctx, proxy.URL(), policy.Class)
 	if err != nil {
 		h.storeFailure(key, err.Error())
 		return service.ManagedProxyHealthResult{}, err
@@ -240,7 +248,37 @@ type companyExitEvidence struct {
 	countryCode string
 }
 
-func probeCompanyManagedExit(ctx context.Context, rawProxyURL string) (companyExitEvidence, error) {
+func companyProbeAForClass(proxyClass string) (string, companyProbeAFormat, error) {
+	switch proxyClass {
+	case service.ManagedProxyClassInternational:
+		return companyProbeAInternationalURL, companyProbeAJSON, nil
+	case service.ManagedProxyClassCNDirect:
+		return companyProbeACNURL, companyProbeAPlainIPv4, nil
+	default:
+		return "", 0, fmt.Errorf("unsupported proxy class for health probe")
+	}
+}
+
+func parseCompanyProbeA(body []byte, format companyProbeAFormat) (string, error) {
+	var rawIP string
+	switch format {
+	case companyProbeAJSON:
+		var response struct {
+			IP string `json:"ip"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return "", fmt.Errorf("probe A parse failure")
+		}
+		rawIP = response.IP
+	case companyProbeAPlainIPv4:
+		rawIP = strings.TrimSpace(string(body))
+	default:
+		return "", fmt.Errorf("probe A format is unsupported")
+	}
+	return service.CanonicalPublicIPv4(rawIP)
+}
+
+func probeCompanyManagedExit(ctx context.Context, rawProxyURL, proxyClass string) (companyExitEvidence, error) {
 	_, parsedProxy, err := proxyurl.Parse(rawProxyURL)
 	if err != nil || parsedProxy == nil {
 		return companyExitEvidence{}, fmt.Errorf("invalid managed proxy URL")
@@ -265,17 +303,15 @@ func probeCompanyManagedExit(ctx context.Context, rawProxyURL string) (companyEx
 		},
 	}
 
-	bodyA, err := companyProbeGET(ctx, client, companyProbeAURL)
+	probeAURL, probeAFormat, err := companyProbeAForClass(proxyClass)
+	if err != nil {
+		return companyExitEvidence{}, err
+	}
+	bodyA, err := companyProbeGET(ctx, client, probeAURL)
 	if err != nil {
 		return companyExitEvidence{}, fmt.Errorf("probe A: %w", err)
 	}
-	var ipify struct {
-		IP string `json:"ip"`
-	}
-	if err := json.Unmarshal(bodyA, &ipify); err != nil {
-		return companyExitEvidence{}, fmt.Errorf("probe A parse failure")
-	}
-	ipA, err := service.CanonicalPublicIPv4(ipify.IP)
+	ipA, err := parseCompanyProbeA(bodyA, probeAFormat)
 	if err != nil {
 		return companyExitEvidence{}, fmt.Errorf("probe A: %w", err)
 	}

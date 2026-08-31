@@ -82,8 +82,11 @@ REQUIRED_SOURCE = {
         "repository.CreateCompanyPrivacyReqClient",
     ),
     "backend/internal/repository/company_managed_proxy_health.go": (
-        'companyProbeAURL      = "https://api.ipify.org?format=json"',
-        'companyProbeBURL      = "https://cloudflare.com/cdn-cgi/trace"',
+        'companyProbeAInternationalURL = "https://api.ipify.org?format=json"',
+        'companyProbeACNURL            = "https://api-ipv4.ip.sb/ip"',
+        'companyProbeBURL              = "https://cloudflare.com/cdn-cgi/trace"',
+        "case service.ManagedProxyClassCNDirect:",
+        "companyProbeAPlainIPv4",
         "ManagedProxyHealthReadyPrimary",
         "ManagedProxyHealthReadyDisaster",
         "ManagedProxyHealthUnhealthy",
@@ -103,8 +106,14 @@ REQUIRED_SOURCE = {
     ),
     "backend/internal/service/managed_proxy.go": (
         "OpenAI PAT and Agent Identity are outside Company Egress V1",
+        'case "US", "SG", "JP", "KR":',
         "disaster_exit_ipv4 must differ from expected_exit_ipv4",
         "policy.DisasterExitIPv4",
+    ),
+    "backend/internal/service/managed_proxy_test.go": (
+        "TestNewManagedProxyPoliciesInternationalCountries",
+        '[]string{"JP", "KR"}',
+        'CountryCode = "DE"',
     ),
     "backend/internal/service/update_service.go": (
         'buildTypeCompany = "company"',

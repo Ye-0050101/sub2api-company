@@ -127,6 +127,27 @@ func TestNewManagedProxyPoliciesRejectsUnsafeStartupConfig(t *testing.T) {
 	})
 }
 
+func TestNewManagedProxyPoliciesInternationalCountries(t *testing.T) {
+	for _, countryCode := range []string{"JP", "KR"} {
+		t.Run(countryCode, func(t *testing.T) {
+			cfg := managedProxyConfig(7)
+			cfg.CompanyEgress.ManagedProxies[0].CountryCode = countryCode
+			policies, err := NewManagedProxyPolicies(cfg)
+			require.NoError(t, err)
+			policy, ok := policies.Lookup(7)
+			require.True(t, ok)
+			require.Equal(t, countryCode, policy.CountryCode)
+		})
+	}
+
+	t.Run("unknown country", func(t *testing.T) {
+		cfg := managedProxyConfig(7)
+		cfg.CompanyEgress.ManagedProxies[0].CountryCode = "DE"
+		_, err := NewManagedProxyPolicies(cfg)
+		require.ErrorIs(t, err, ErrManagedEgressPolicy)
+	})
+}
+
 func TestValidateManagedProxyFailsClosed(t *testing.T) {
 	policy := ManagedProxyPolicy{ProxyID: 7}
 	tests := []struct {

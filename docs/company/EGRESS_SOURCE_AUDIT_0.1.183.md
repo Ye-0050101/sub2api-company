@@ -161,7 +161,7 @@ Account.ProxyID 必须精确匹配 policy ProxyID；shadow account 与 parent Pr
 
 ## L. 已知安全盲点
 
-- 单 UID kernel policy 不能识别 Account identity 或区分 US/SG SOCKS。
+- 单 UID kernel policy 不能识别 Account identity 或区分 US/SG/JP/KR SOCKS。
 - host guard 尚未部署/验收，因此 production NOT READY。
 - fixed ProxyID/expected IP 尚未写入生产配置。
 - 本地源码 patch 必须经 Go 1.27 CI、lint、unit/integration 才能构建。

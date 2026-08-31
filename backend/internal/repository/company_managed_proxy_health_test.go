@@ -119,3 +119,35 @@ func TestCompanyManagedProxyHealthReturnsCachedDisasterState(t *testing.T) {
 	require.Equal(t, policy.DisasterExitIPv4, result.ExitIPv4)
 	require.Equal(t, uint64(5), result.Epoch)
 }
+
+func TestCompanyProbeAIsCompileTimeAndClassScoped(t *testing.T) {
+	url, format, err := companyProbeAForClass(service.ManagedProxyClassInternational)
+	require.NoError(t, err)
+	require.Equal(t, companyProbeAInternationalURL, url)
+	require.Equal(t, companyProbeAJSON, format)
+
+	url, format, err = companyProbeAForClass(service.ManagedProxyClassCNDirect)
+	require.NoError(t, err)
+	require.Equal(t, companyProbeACNURL, url)
+	require.Equal(t, companyProbeAPlainIPv4, format)
+
+	_, _, err = companyProbeAForClass("UNKNOWN")
+	require.ErrorContains(t, err, "unsupported proxy class")
+}
+
+func TestParseCompanyProbeAFormatsFailClosed(t *testing.T) {
+	ip, err := parseCompanyProbeA([]byte(`{"ip":"8.8.8.8"}`), companyProbeAJSON)
+	require.NoError(t, err)
+	require.Equal(t, "8.8.8.8", ip)
+
+	ip, err = parseCompanyProbeA([]byte("47.107.65.183\n"), companyProbeAPlainIPv4)
+	require.NoError(t, err)
+	require.Equal(t, "47.107.65.183", ip)
+
+	_, err = parseCompanyProbeA([]byte("2001:db8::1\n"), companyProbeAPlainIPv4)
+	require.Error(t, err)
+	_, err = parseCompanyProbeA([]byte("not-json"), companyProbeAJSON)
+	require.ErrorContains(t, err, "parse failure")
+	_, err = parseCompanyProbeA([]byte("8.8.8.8"), companyProbeAFormat(255))
+	require.ErrorContains(t, err, "unsupported")
+}

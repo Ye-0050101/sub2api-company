@@ -27,11 +27,13 @@
 - `backend/internal/service/managed_proxy.go`
   - deployment config -> immutable ProxyID policy
   - platform/type 支持矩阵
+  - INTERNATIONAL country allowlist：US / SG / JP / KR；CN_DIRECT：CN
   - Proxy 不变量、class、custom base URL、destination allowlist
   - EgressResolver 与现有 OAuth session.ProxyURL 绑定，不修改上游 session DTO
 - `backend/internal/repository/company_managed_proxy_health.go`
   - startup/periodic/on-demand health
   - 双 HTTPS evidence、主/灾备固定出口 IP、country、TTL、fingerprint
+  - INTERNATIONAL 使用 ipify Probe A；CN_DIRECT 使用编译期 IP.SB Probe A；二者共享 Cloudflare Probe B，禁止运行时 fallback
   - runtime 状态：READY_PRIMARY / READY_DISASTER / UNHEALTHY
 - `backend/internal/repository/company_http_upstream.go`
   - AccountID 重新解析、覆盖调用方 proxy、目的域校验、redirect deny
@@ -69,6 +71,7 @@
 - OAuth callback ProxyID mismatch
 - WebSocket project parser
 - Exit IPv4/country mismatch
+- class-scoped Probe A、CN plain IPv4 parser、IPv6/未知格式拒绝
 - RouteHealth expired
 - Company HTTP proxy override / host reject
 - referenced Proxy update/delete reject
