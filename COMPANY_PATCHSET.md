@@ -13,14 +13,14 @@
 
 相对 `a0ac9b4` 的瘦身结果：
 
-- 总差异文件：50（原实现为 59）
+- 总差异文件：53（原实现为 59；增加的 3 个文件是升级/部署/验证脚本）
 - 既有 `backend/internal` / `backend/cmd` 文件接缝：29（原实现为 40）
-- 新增 company 核心/测试文件：13；这些文件不与 upstream 同路径冲突
+- 新增 company 核心/测试/运维文件：16；这些文件不与 upstream 同路径冲突
 - 官方 `service/wire.go` 只保留 7 个 provider 名称替换
 - 官方 `config.go` 只保留 Company 字段、默认值和 release 启动检查
 - 四套 OAuth session DTO 已完全恢复官方版本；route 固定复用现有 `session.ProxyURL`
 
-升级审查以“29 个既有接缝”为准，而不是把 company 新文件和文档误算成 50 个上游冲突点。
+升级审查以“29 个既有接缝”为准，而不是把 company 新文件、运维脚本和文档误算成 53 个上游冲突点。
 
 ### Company 核心
 
@@ -126,12 +126,27 @@
 7. 生成可追溯 binary/config SHA
 8. staging 后才进入生产部署
 
-未来可提供三个职责分离脚本：
+已提供三个职责分离入口：
 
-- `company-audit-upgrade`：只读差异和静态门
-- `company-build-egress`：可复现构建与 SHA
-- `company-deploy-egress`：有状态部署/回滚
+- `tools/company-upgrade-and-deploy.ps1`
+  - 临时分支 merge upstream，不 rebase、不 force push
+  - 只在静态门通过后 ff-only 更新 `main` 与 `company/egress-v1`
+  - 等待 GitHub CI 与 Security Scan 全绿
+  - 下载 CI 构建的 Linux/amd64 artifact；本机不安装 Go
+  - 使用当前 Git credential 和 SSH agent，不索取或保存 PAT/私钥
+- `deploy/company-deploy-egress.sh`
+  - 校验 service 用户、路径、binary SHA、数据库备份确认和 nftables kill-switch
+  - 原子替换 `/opt/sub2api/sub2api`，健康失败自动恢复旧 binary
+  - 不修改 sing-box、systemd、配置、数据库或防火墙
+- `deploy/company-verify-egress.sh`
+  - 只读检查 binary/config SHA、systemd、SOCKS listener、UID nftables、IPv6/DNS deny 和当前连接
 
-另保留只读 `company-verify-egress`，检查 binary SHA、company config SHA、ProxyID policy、ManagedProxyHealth、本地 SOCKS listeners、nftables、Sub2API UID 公网连接、DNS/IPv6 拒绝。
+一键命令（当前仍禁止执行，直到数据库备份和 kernel guard 验收）：
 
-本阶段不创建或运行这些服务器脚本。
+```powershell
+.\tools\company-upgrade-and-deploy.ps1 `
+  -UpstreamRef <OFFICIAL_TAG_OR_COMMIT> `
+  -Deploy `
+  -DatabaseBackupConfirmed `
+  -SshTarget root@<SERVER>
+```
