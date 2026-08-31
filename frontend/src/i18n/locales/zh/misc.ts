@@ -31,6 +31,8 @@ export default {
     refresh: '刷新',
     sourceMode: '源码构建',
     sourceModeHint: '源码构建请使用 git pull 更新',
+    companyManagedBuild: 'Company managed build',
+    companyManagedHint: '请使用经过验证的 company-update / company-deploy-egress 脚本更新和部署。',
     updateNow: '立即更新',
     updating: '正在更新...',
     updateComplete: '更新完成',

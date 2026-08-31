@@ -57,6 +57,8 @@
 - Antigravity OAuth：company production provider 直接 UNSUPPORTED
 - managed OpenAI 请求不允许本地插件接管；第三方 Web Search emulation 在 enforcement 下关闭
 - ProxyService sentinel：受管 Proxy readonly 错误
+- Company build：`BuildType=company`；后端在线更新/在线回退 fail closed，不访问官方 release API
+- Company version UI：隐藏官方更新、release 链接和在线回退，只提示使用批准的更新/部署脚本
 
 ### 测试与 CI
 
@@ -70,6 +72,8 @@
 - RouteHealth expired
 - Company HTTP proxy override / host reject
 - referenced Proxy update/delete reject
+- company build update/rollback reject，GitHub release client 零调用
+- company frontend build type/store 状态
 - `tools/check_company_egress_guard.py`
 - Backend CI 中执行 company static guard
 
@@ -143,6 +147,8 @@
   - 不修改 sing-box、systemd、配置、数据库或防火墙
 - `deploy/company-verify-egress.sh`
   - 只读检查 binary/config SHA、systemd、SOCKS listener、UID nftables、IPv6/DNS deny 和当前连接
+
+Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
 本机更新命令：
 

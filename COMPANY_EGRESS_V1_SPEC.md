@@ -206,6 +206,17 @@ Linux kernel 不知道 Account identity，不能单独强制 US account 只能�
 
 Host guard 是 origin-leak boundary，不是 account-country selection engine。未来若需 kernel-level per-country/account isolation，应升级为 separate worker/UID/netns，不属于 V1。
 
+## 11.1 Company 构建更新边界
+
+- Company CI 必须注入 `BuildType=company`。
+- Company build 的版本检查不得访问 `Wei-Shaw/sub2api` release API。
+- 后端在线更新、在线 release 回退和本地 `.backup` 回退接口全部 fail closed。
+- 前端不显示“立即更新”、官方 release 链接或在线回退；只显示 `Company managed build` 和批准脚本提示。
+- 官方同步只在本机仓库通过 `company-update.ps1` 完成；CI 全绿后生成可追溯 artifact，再由 Linux 部署脚本校验 SHA、guard 和数据库备份后原子部署。
+- 部署失败必须自动恢复上一 binary；不得用官方内置 updater 绕过 Company patch、CI 或 activation gate。
+
+该边界只管理软件供应链，不替代 ProxyID、RouteHealth、sing-box Guard、DNS/IPv6 containment 或 Sub2API UID nftables kill-switch。
+
 ## 12. 生产启用顺序
 
 ```text

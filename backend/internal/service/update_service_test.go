@@ -12,10 +12,13 @@ import (
 )
 
 type updateServiceCacheStub struct {
-	data string
+	data     string
+	getCalls int
+	setCalls int
 }
 
 func (s *updateServiceCacheStub) GetUpdateInfo(context.Context) (string, error) {
+	s.getCalls++
 	if s.data == "" {
 		return "", errors.New("cache miss")
 	}
@@ -23,6 +26,7 @@ func (s *updateServiceCacheStub) GetUpdateInfo(context.Context) (string, error) 
 }
 
 func (s *updateServiceCacheStub) SetUpdateInfo(_ context.Context, data string, _ time.Duration) error {
+	s.setCalls++
 	s.data = data
 	return nil
 }
@@ -31,22 +35,68 @@ type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
 	recentReleases []*GitHubRelease
 	recentErr      error
+	latestCalls    int
+	recentCalls    int
+	downloadCalls  int
+	checksumCalls  int
 }
 
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
+	s.latestCalls++
 	return s.release, nil
 }
 
 func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
+	s.recentCalls++
 	return s.recentReleases, s.recentErr
 }
 
 func (s *updateServiceGitHubClientStub) DownloadFile(context.Context, string, string, int64) error {
+	s.downloadCalls++
 	panic("DownloadFile should not be called when no update is available")
 }
 
 func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, string) ([]byte, error) {
+	s.checksumCalls++
 	panic("FetchChecksumFile should not be called when no update is available")
+}
+
+func TestUpdateServiceCompanyBuildNeverUsesOfficialReleaseOrMutatesBinary(t *testing.T) {
+	cache := &updateServiceCacheStub{data: `{"latest":"0.1.999","has_update":true}`}
+	github := &updateServiceGitHubClientStub{
+		release:        &GitHubRelease{TagName: "v0.1.999"},
+		recentReleases: []*GitHubRelease{{TagName: "v0.1.182"}},
+	}
+	svc := NewUpdateService(cache, github, "0.1.183-company.abcdef", buildTypeCompany)
+
+	for _, force := range []bool{false, true} {
+		info, err := svc.CheckUpdate(t.Context(), force)
+		require.NoError(t, err)
+		require.Equal(t, "0.1.183-company.abcdef", info.CurrentVersion)
+		require.Equal(t, info.CurrentVersion, info.LatestVersion)
+		require.False(t, info.HasUpdate)
+		require.Nil(t, info.ReleaseInfo)
+		require.Equal(t, buildTypeCompany, info.BuildType)
+		require.Contains(t, info.Warning, "Company managed build")
+	}
+
+	require.ErrorIs(t, svc.PerformUpdate(t.Context()), ErrCompanyManagedUpdate)
+	require.ErrorIs(t, svc.Rollback(), ErrCompanyManagedUpdate)
+	versions, err := svc.ListRollbackVersions(t.Context())
+	require.ErrorIs(t, err, ErrCompanyManagedUpdate)
+	require.Nil(t, versions)
+	require.ErrorIs(t, svc.RollbackToVersion(t.Context(), "0.1.182"), ErrCompanyManagedUpdate)
+	_, err = svc.fetchLatestRelease(t.Context())
+	require.ErrorIs(t, err, ErrCompanyManagedUpdate)
+	_, err = svc.fetchRollbackCandidates(t.Context())
+	require.ErrorIs(t, err, ErrCompanyManagedUpdate)
+
+	require.Zero(t, cache.getCalls)
+	require.Zero(t, cache.setCalls)
+	require.Zero(t, github.latestCalls)
+	require.Zero(t, github.recentCalls)
+	require.Zero(t, github.downloadCalls)
+	require.Zero(t, github.checksumCalls)
 }
 
 func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {

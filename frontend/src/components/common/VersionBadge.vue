@@ -42,6 +42,7 @@
               t('version.currentVersion')
             }}</span>
             <button
+              v-if="!isCompanyBuild"
               @click="refreshVersion(true)"
               class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-dark-200"
               :disabled="loading"
@@ -107,15 +108,31 @@
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
-                    hasUpdate
+                    isCompanyBuild
+                      ? t('version.companyManagedBuild')
+                      : hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
                   }}
                 </p>
               </div>
 
+              <!-- Company builds are updated only by the verified external pipeline. -->
+              <div v-if="isCompanyBuild" class="space-y-2">
+                <div
+                  class="rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800/50 dark:bg-blue-900/20"
+                >
+                  <p class="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    {{ t('version.companyManagedBuild') }}
+                  </p>
+                  <p class="mt-1 text-xs text-blue-600/80 dark:text-blue-400/80">
+                    {{ t('version.companyManagedHint') }}
+                  </p>
+                </div>
+              </div>
+
               <!-- Priority 1: Update error (must check before hasUpdate) -->
-              <div v-if="updateError" class="space-y-2">
+              <div v-else-if="updateError" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -676,6 +693,7 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const isCompanyBuild = computed(() => buildType.value === 'company')
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -728,7 +746,7 @@ const activeManualCommand = computed(() =>
   manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value
 )
 
-// Only show update check for release builds (binary/docker deployment)
+// Only official release builds may expose the built-in updater.
 const isReleaseBuild = computed(() => buildType.value === 'release')
 
 function toggleDropdown() {
@@ -752,7 +770,7 @@ async function refreshVersion(force = true) {
 }
 
 async function handleUpdate() {
-  if (updating.value) return
+  if (isCompanyBuild.value || updating.value) return
 
   updating.value = true
   updateError.value = ''
@@ -783,7 +801,7 @@ function resetRollbackState() {
 }
 
 async function toggleRollbackPanel() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || isCompanyBuild.value) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
   // Source builds only show a hint, no version list to fetch
   if (

@@ -133,7 +133,7 @@ jobs:
         run: |
           mkdir -p ../dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embed \
-            -trimpath -ldflags="-s -w -X main.Version=company-${GITHUB_SHA}" \
+            -trimpath -ldflags="-s -w -X main.Version=company-${GITHUB_SHA} -X main.Commit=${GITHUB_SHA} -X main.BuildType=company" \
             -o ../dist/sub2api-linux-amd64 ./cmd/server
       - name: Upload verified company website binary
         uses: actions/upload-artifact@v7

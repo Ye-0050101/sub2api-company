@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { checkUpdates } from '@/api/admin/system'
 import type { PublicSettings } from '@/types'
 
 function createDeferred<T>() {
@@ -79,6 +80,7 @@ describe('useAppStore', () => {
     vi.useFakeTimers()
     localStorage.clear()
     vi.mocked(getPublicSettings).mockReset()
+    vi.mocked(checkUpdates).mockReset()
     // 清除 window.__APP_CONFIG__
     delete (window as any).__APP_CONFIG__
   })
@@ -301,6 +303,32 @@ describe('useAppStore', () => {
       expect(store.loading).toBe(false)
       expect(store.toasts).toHaveLength(1)
       expect(store.toasts[0].type).toBe('error')
+    })
+  })
+
+  // --- Version management ---
+
+  describe('版本管理', () => {
+    it('Company build 不暴露官方 release 或在线更新状态', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue({
+        current_version: '0.1.183-company.abcdef',
+        latest_version: '0.1.183-company.abcdef',
+        has_update: false,
+        cached: false,
+        warning: 'Company managed build: use company-update and company-deploy-egress',
+        build_type: 'company'
+      })
+      const store = useAppStore()
+
+      const result = await store.fetchVersion(true)
+
+      expect(checkUpdates).toHaveBeenCalledWith(true)
+      expect(result?.build_type).toBe('company')
+      expect(store.buildType).toBe('company')
+      expect(store.hasUpdate).toBe(false)
+      expect(store.releaseInfo).toBeNull()
+      expect(store.currentVersion).toBe('0.1.183-company.abcdef')
+      expect(store.latestVersion).toBe(store.currentVersion)
     })
   })
 

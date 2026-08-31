@@ -63,6 +63,10 @@ AUDIT_ALLOWLIST: dict[tuple[str, str, str], str] = {
 }
 
 REQUIRED_SOURCE = {
+    ".github/workflows/backend-ci.yml": (
+        "-X main.Version=company-${GITHUB_SHA}",
+        "-X main.BuildType=company",
+    ),
     "backend/cmd/server/wire_gen.go": (
         "repository.NewCompanyHTTPUpstream(",
         "repository.NewCompanyManagedProxyHealth(",
@@ -101,6 +105,22 @@ REQUIRED_SOURCE = {
         "OpenAI PAT and Agent Identity are outside Company Egress V1",
         "disaster_exit_ipv4 must differ from expected_exit_ipv4",
         "policy.DisasterExitIPv4",
+    ),
+    "backend/internal/service/update_service.go": (
+        'buildTypeCompany = "company"',
+        "ErrCompanyManagedUpdate",
+        "if s.companyManaged()",
+        "Company managed build: use company-update and company-deploy-egress",
+    ),
+    "backend/internal/service/update_service_test.go": (
+        "TestUpdateServiceCompanyBuildNeverUsesOfficialReleaseOrMutatesBinary",
+        "require.Zero(t, github.latestCalls)",
+        "require.Zero(t, github.downloadCalls)",
+    ),
+    "frontend/src/components/common/VersionBadge.vue": (
+        'v-if="isCompanyBuild"',
+        "version.companyManagedHint",
+        "if (isCompanyBuild.value || updating.value) return",
     ),
     "backend/internal/service/openai_codex_account_identity.go": (
         "resolveConfiguredManagedAccount(",
