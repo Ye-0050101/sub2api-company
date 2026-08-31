@@ -48,13 +48,14 @@
 READY 必须同时满足：
 
 - 两个 probe 返回同一 canonical public IPv4
-- IPv4 等于 `expected_exit_ipv4`
+- IPv4 等于 `expected_exit_ipv4` 时为 `READY_PRIMARY`
+- IPv4 等于可选且唯一的 `disaster_exit_ipv4` 时为 `READY_DISASTER`
 - Cloudflare `loc` 等于 `country_code`
 - 正常 TLS、无 redirect、bounded timeout/body
 - Proxy invariant 与 startup fingerprint 未变化
 - evidence 未过 TTL
 
-任何不一致均 FAIL CLOSED。
+任何第三个 IP 或其他不一致均为 `UNHEALTHY` 并 FAIL CLOSED。
 
 ## Scope evidence
 

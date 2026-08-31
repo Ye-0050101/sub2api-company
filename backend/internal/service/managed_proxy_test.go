@@ -37,12 +37,18 @@ func (s *managedProxyRepositoryStub) GetByID(_ context.Context, id int64) (*Prox
 }
 
 type managedProxyHealthStub struct {
-	epoch uint64
-	err   error
+	epoch    uint64
+	state    string
+	exitIPv4 string
+	err      error
 }
 
-func (s *managedProxyHealthStub) RequireReady(context.Context, ManagedProxyPolicy, *Proxy, string) (uint64, error) {
-	return s.epoch, s.err
+func (s *managedProxyHealthStub) RequireReady(context.Context, ManagedProxyPolicy, *Proxy, string) (ManagedProxyHealthResult, error) {
+	state := s.state
+	if state == "" {
+		state = ManagedProxyHealthReadyPrimary
+	}
+	return ManagedProxyHealthResult{Epoch: s.epoch, State: state, ExitIPv4: s.exitIPv4}, s.err
 }
 
 func managedProxyConfig(proxyID int64) *config.Config {
@@ -88,6 +94,20 @@ func TestNewManagedProxyPoliciesRejectsUnsafeStartupConfig(t *testing.T) {
 	t.Run("duplicate proxy id", func(t *testing.T) {
 		cfg := managedProxyConfig(7)
 		cfg.CompanyEgress.ManagedProxies = append(cfg.CompanyEgress.ManagedProxies, cfg.CompanyEgress.ManagedProxies[0])
+		_, err := NewManagedProxyPolicies(cfg)
+		require.ErrorIs(t, err, ErrManagedEgressPolicy)
+	})
+
+	t.Run("invalid disaster IPv4", func(t *testing.T) {
+		cfg := managedProxyConfig(7)
+		cfg.CompanyEgress.ManagedProxies[0].DisasterExitIPv4 = "192.0.2.1"
+		_, err := NewManagedProxyPolicies(cfg)
+		require.ErrorIs(t, err, ErrManagedEgressPolicy)
+	})
+
+	t.Run("duplicate primary and disaster IPv4", func(t *testing.T) {
+		cfg := managedProxyConfig(7)
+		cfg.CompanyEgress.ManagedProxies[0].DisasterExitIPv4 = cfg.CompanyEgress.ManagedProxies[0].ExpectedExitIPv4
 		_, err := NewManagedProxyPolicies(cfg)
 		require.ErrorIs(t, err, ErrManagedEgressPolicy)
 	})
@@ -140,7 +160,7 @@ func TestManagedProxyResolverUsesOnlyConfiguredProxyID(t *testing.T) {
 		&managedAccountRepositoryStub{accounts: map[int64]*Account{account.ID: account}},
 		&managedProxyRepositoryStub{proxies: map[int64]*Proxy{proxyID: proxy}},
 		policies,
-		&managedProxyHealthStub{epoch: 4},
+		&managedProxyHealthStub{epoch: 4, exitIPv4: "8.8.8.8"},
 	)
 	require.NoError(t, err)
 
@@ -149,6 +169,8 @@ func TestManagedProxyResolverUsesOnlyConfiguredProxyID(t *testing.T) {
 	require.Equal(t, proxyID, decision.ProxyID)
 	require.Equal(t, "socks5h://127.0.0.1:11001", decision.ProxyURL)
 	require.Equal(t, uint64(4), decision.HealthEpoch)
+	require.Equal(t, ManagedProxyHealthReadyPrimary, decision.HealthState)
+	require.Equal(t, "8.8.8.8", decision.ObservedExitIPv4)
 }
 
 func TestManagedProxyResolverRejectsUnsupportedAndSoftDeletedProxy(t *testing.T) {

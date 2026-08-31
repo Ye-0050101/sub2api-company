@@ -128,6 +128,8 @@ cors:
 #       class: "INTERNATIONAL_PROXY"
 #       country_code: "US"
 #       expected_exit_ipv4: "<US_A_FIXED_PUBLIC_IPV4>"
+#       # Optional, same-country disaster exit. Any third IP fails closed.
+#       disaster_exit_ipv4: "<US_B_FIXED_PUBLIC_IPV4>"
 #     - proxy_id: <CN_PROXY_ID>
 #       class: "CN_DIRECT"
 #       country_code: "CN"

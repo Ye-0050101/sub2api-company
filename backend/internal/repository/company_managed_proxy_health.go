@@ -29,10 +29,15 @@ type managedProxyHealthKey struct {
 }
 
 type managedProxyHealthState struct {
-	ready     bool
+	status    string
+	exitIPv4  string
 	checkedAt time.Time
 	epoch     uint64
 	message   string
+}
+
+func managedProxyHealthReady(status string) bool {
+	return status == service.ManagedProxyHealthReadyPrimary || status == service.ManagedProxyHealthReadyDisaster
 }
 
 type companyManagedProxyHealth struct {
@@ -117,50 +122,54 @@ func (h *companyManagedProxyHealth) RequireReady(
 	policy service.ManagedProxyPolicy,
 	proxy *service.Proxy,
 	fingerprint string,
-) (uint64, error) {
+) (service.ManagedProxyHealthResult, error) {
 	if h.policies.DevelopmentBypass() {
-		return 1, nil
+		return service.ManagedProxyHealthResult{
+			Epoch:    1,
+			State:    service.ManagedProxyHealthReadyPrimary,
+			ExitIPv4: policy.ExpectedExitIPv4,
+		}, nil
 	}
 	if err := service.ValidateManagedProxy(policy, proxy); err != nil {
-		return 0, err
+		return service.ManagedProxyHealthResult{}, err
 	}
 	if fingerprint == "" || fingerprint != service.ManagedProxyFingerprint(policy, proxy) {
-		return 0, fmt.Errorf("policy fingerprint mismatch")
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("policy fingerprint mismatch")
 	}
 	if expected := h.fingerprints[policy.ProxyID]; expected == "" || fingerprint != expected {
-		return 0, fmt.Errorf("startup proxy fingerprint mismatch")
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("startup proxy fingerprint mismatch")
 	}
 
 	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}
 	h.mu.Lock()
 	state, ok := h.states[key]
 	now := h.now()
-	if ok && state.ready && now.Sub(state.checkedAt) >= service.ManagedProxyHealthTTL {
+	if ok && managedProxyHealthReady(state.status) && now.Sub(state.checkedAt) >= service.ManagedProxyHealthTTL {
 		h.mu.Unlock()
-		return 0, fmt.Errorf("health evidence expired")
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("health evidence expired")
 	}
-	if ok && state.ready && now.Sub(state.checkedAt) < service.ManagedProxyHealthProbeInterval {
+	if ok && managedProxyHealthReady(state.status) && now.Sub(state.checkedAt) < service.ManagedProxyHealthProbeInterval {
 		h.mu.Unlock()
-		return state.epoch, nil
+		return service.ManagedProxyHealthResult{Epoch: state.epoch, State: state.status, ExitIPv4: state.exitIPv4}, nil
 	}
-	if ok && !state.ready && now.Sub(state.checkedAt) < service.ManagedProxyHealthProbeInterval {
+	if ok && !managedProxyHealthReady(state.status) && now.Sub(state.checkedAt) < service.ManagedProxyHealthProbeInterval {
 		h.mu.Unlock()
-		return 0, fmt.Errorf("route unhealthy: %s", state.message)
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("route unhealthy: %s", state.message)
 	}
 	h.mu.Unlock()
 
 	current, err := h.proxies.GetByID(ctx, policy.ProxyID)
 	if err != nil {
 		h.storeFailure(key, "proxy lookup failed")
-		return 0, fmt.Errorf("proxy lookup failed: %w", err)
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("proxy lookup failed: %w", err)
 	}
 	if err := service.ValidateManagedProxy(policy, current); err != nil {
 		h.storeFailure(key, "proxy invariant changed")
-		return 0, err
+		return service.ManagedProxyHealthResult{}, err
 	}
 	if service.ManagedProxyFingerprint(policy, current) != fingerprint {
 		h.storeFailure(key, "proxy fingerprint changed")
-		return 0, fmt.Errorf("proxy fingerprint changed")
+		return service.ManagedProxyHealthResult{}, fmt.Errorf("proxy fingerprint changed")
 	}
 	return h.probeAndStore(ctx, policy, current, fingerprint)
 }
@@ -170,37 +179,47 @@ func (h *companyManagedProxyHealth) probeAndStore(
 	policy service.ManagedProxyPolicy,
 	proxy *service.Proxy,
 	fingerprint string,
-) (uint64, error) {
+) (service.ManagedProxyHealthResult, error) {
 	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}
 	evidence, err := probeCompanyManagedExit(ctx, proxy.URL())
 	if err != nil {
 		h.storeFailure(key, err.Error())
-		return 0, err
+		return service.ManagedProxyHealthResult{}, err
 	}
-	err = validateCompanyExitEvidence(policy, evidence)
+	status, err := validateCompanyExitEvidence(policy, evidence)
 	if err != nil {
 		h.storeFailure(key, err.Error())
-		return 0, err
+		return service.ManagedProxyHealthResult{}, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	previous := h.states[key]
 	epoch := previous.epoch + 1
-	h.states[key] = managedProxyHealthState{ready: true, checkedAt: h.now(), epoch: epoch}
-	return epoch, nil
+	h.states[key] = managedProxyHealthState{
+		status:    status,
+		exitIPv4: evidence.ipA,
+		checkedAt: h.now(),
+		epoch:     epoch,
+	}
+	return service.ManagedProxyHealthResult{Epoch: epoch, State: status, ExitIPv4: evidence.ipA}, nil
 }
 
-func validateCompanyExitEvidence(policy service.ManagedProxyPolicy, evidence companyExitEvidence) error {
+func validateCompanyExitEvidence(policy service.ManagedProxyPolicy, evidence companyExitEvidence) (string, error) {
 	if evidence.ipA != evidence.ipB {
-		return fmt.Errorf("probe IP disagreement")
-	}
-	if evidence.ipA != policy.ExpectedExitIPv4 {
-		return fmt.Errorf("exit IPv4 mismatch")
+		return service.ManagedProxyHealthUnhealthy, fmt.Errorf("probe IP disagreement")
 	}
 	if evidence.countryCode != policy.CountryCode {
-		return fmt.Errorf("exit country mismatch")
+		return service.ManagedProxyHealthUnhealthy, fmt.Errorf("exit country mismatch")
 	}
-	return nil
+	switch evidence.ipA {
+	case policy.ExpectedExitIPv4:
+		return service.ManagedProxyHealthReadyPrimary, nil
+	case policy.DisasterExitIPv4:
+		if policy.DisasterExitIPv4 != "" {
+			return service.ManagedProxyHealthReadyDisaster, nil
+		}
+	}
+	return service.ManagedProxyHealthUnhealthy, fmt.Errorf("exit IPv4 mismatch")
 }
 
 func (h *companyManagedProxyHealth) storeFailure(key managedProxyHealthKey, message string) {
@@ -208,7 +227,7 @@ func (h *companyManagedProxyHealth) storeFailure(key managedProxyHealthKey, mess
 	defer h.mu.Unlock()
 	previous := h.states[key]
 	h.states[key] = managedProxyHealthState{
-		ready:     false,
+		status:    service.ManagedProxyHealthUnhealthy,
 		checkedAt: h.now(),
 		epoch:     previous.epoch + 1,
 		message:   message,

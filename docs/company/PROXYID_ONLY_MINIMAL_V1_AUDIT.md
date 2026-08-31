@@ -18,6 +18,8 @@ Account.ProxyID -> Account.Proxy -> Proxy.URL() -> HTTPUpstream
 
 因此 V1 不需要 EgressRoute 表、Account 新字段或 migration。需要补的是现有 ProxyID 周围的不可变 deployment policy、health/destination gate，以及不能经过 HTTPUpstream 的 OAuth/Refresh/Usage/WS 路径。
 
+一个 ProxyID 可以声明一个主固定 IPv4 和至多一个同国家灾备固定 IPv4；RouteHealth 区分 `READY_PRIMARY`、`READY_DISASTER`、`UNHEALTHY`，任何未声明 IP 继续 fail closed。该扩展仍不增加数据库模型。
+
 ## Minimal V1
 
 核心新增仅承担五类职责：

@@ -12,4 +12,5 @@ type CompanyManagedProxyConfig struct {
 	Class            string `mapstructure:"class"`
 	CountryCode      string `mapstructure:"country_code"`
 	ExpectedExitIPv4 string `mapstructure:"expected_exit_ipv4"`
+	DisasterExitIPv4 string `mapstructure:"disaster_exit_ipv4"`
 }

@@ -31,7 +31,8 @@
   - EgressResolver 与现有 OAuth session.ProxyURL 绑定，不修改上游 session DTO
 - `backend/internal/repository/company_managed_proxy_health.go`
   - startup/periodic/on-demand health
-  - 双 HTTPS evidence、固定出口 IP/country、TTL、fingerprint
+  - 双 HTTPS evidence、主/灾备固定出口 IP、country、TTL、fingerprint
+  - runtime 状态：READY_PRIMARY / READY_DISASTER / UNHEALTHY
 - `backend/internal/repository/company_http_upstream.go`
   - AccountID 重新解析、覆盖调用方 proxy、目的域校验、redirect deny
 - `backend/internal/repository/company_proxy_repository.go`

@@ -80,6 +80,14 @@ REQUIRED_SOURCE = {
     "backend/internal/repository/company_managed_proxy_health.go": (
         'companyProbeAURL      = "https://api.ipify.org?format=json"',
         'companyProbeBURL      = "https://cloudflare.com/cdn-cgi/trace"',
+        "ManagedProxyHealthReadyPrimary",
+        "ManagedProxyHealthReadyDisaster",
+        "ManagedProxyHealthUnhealthy",
+        "case policy.DisasterExitIPv4:",
+    ),
+    "backend/internal/config/company_egress.go": (
+        "DisasterExitIPv4",
+        'mapstructure:"disaster_exit_ipv4"',
     ),
     "backend/internal/service/openai_ws_client.go": (
         "proxyurl.Parse(proxy)",
@@ -91,6 +99,8 @@ REQUIRED_SOURCE = {
     ),
     "backend/internal/service/managed_proxy.go": (
         "OpenAI PAT and Agent Identity are outside Company Egress V1",
+        "disaster_exit_ipv4 must differ from expected_exit_ipv4",
+        "policy.DisasterExitIPv4",
     ),
     "backend/internal/service/openai_codex_account_identity.go": (
         "resolveConfiguredManagedAccount(",

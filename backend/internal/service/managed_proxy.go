@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	ManagedProxyClassInternational = "INTERNATIONAL_PROXY"
-	ManagedProxyClassCNDirect      = "CN_DIRECT"
-	managedProxyStartupTimeout     = 10 * time.Second
+	ManagedProxyClassInternational  = "INTERNATIONAL_PROXY"
+	ManagedProxyClassCNDirect       = "CN_DIRECT"
+	ManagedProxyHealthReadyPrimary  = "READY_PRIMARY"
+	ManagedProxyHealthReadyDisaster = "READY_DISASTER"
+	ManagedProxyHealthUnhealthy     = "UNHEALTHY"
+	managedProxyStartupTimeout      = 10 * time.Second
 )
 
 var (
@@ -37,6 +40,7 @@ type ManagedProxyPolicy struct {
 	Class            string
 	CountryCode      string
 	ExpectedExitIPv4 string
+	DisasterExitIPv4 string
 }
 
 type ManagedProxyPolicies struct {
@@ -138,6 +142,7 @@ func normalizeManagedProxyPolicy(raw config.CompanyManagedProxyConfig) (ManagedP
 		Class:            strings.ToUpper(strings.TrimSpace(raw.Class)),
 		CountryCode:      strings.ToUpper(strings.TrimSpace(raw.CountryCode)),
 		ExpectedExitIPv4: strings.TrimSpace(raw.ExpectedExitIPv4),
+		DisasterExitIPv4: strings.TrimSpace(raw.DisasterExitIPv4),
 	}
 	if policy.ProxyID <= 0 {
 		return ManagedProxyPolicy{}, fmt.Errorf("%w: proxy_id must be positive", ErrManagedEgressPolicy)
@@ -159,6 +164,16 @@ func normalizeManagedProxyPolicy(raw config.CompanyManagedProxyConfig) (ManagedP
 		return ManagedProxyPolicy{}, fmt.Errorf("%w: expected_exit_ipv4 must be a canonical public IPv4", ErrManagedEgressPolicy)
 	}
 	policy.ExpectedExitIPv4 = canonicalIP
+	if policy.DisasterExitIPv4 != "" {
+		disasterIP, disasterErr := CanonicalPublicIPv4(policy.DisasterExitIPv4)
+		if disasterErr != nil {
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: disaster_exit_ipv4 must be a canonical public IPv4", ErrManagedEgressPolicy)
+		}
+		if disasterIP == policy.ExpectedExitIPv4 {
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: disaster_exit_ipv4 must differ from expected_exit_ipv4", ErrManagedEgressPolicy)
+		}
+		policy.DisasterExitIPv4 = disasterIP
+	}
 	return policy, nil
 }
 
@@ -233,12 +248,21 @@ type ManagedProxyDecision struct {
 	ProxyClass         string
 	CountryCode        string
 	ExpectedExitIPv4   string
+	DisasterExitIPv4   string
+	ObservedExitIPv4   string
+	HealthState        string
 	PolicyFingerprint  string
 	HealthEpoch        uint64
 }
 
+type ManagedProxyHealthResult struct {
+	Epoch    uint64
+	State    string
+	ExitIPv4 string
+}
+
 type ManagedProxyHealthGate interface {
-	RequireReady(ctx context.Context, policy ManagedProxyPolicy, proxy *Proxy, fingerprint string) (uint64, error)
+	RequireReady(ctx context.Context, policy ManagedProxyPolicy, proxy *Proxy, fingerprint string) (ManagedProxyHealthResult, error)
 }
 
 type ManagedProxyResolver interface {
@@ -396,7 +420,7 @@ func (r *managedProxyResolver) resolve(ctx context.Context, requestedAccountID i
 		return ManagedProxyDecision{}, fmt.Errorf("%w: managed proxy URL is invalid", ErrManagedEgressPolicy)
 	}
 	fingerprint := ManagedProxyFingerprint(policy, proxy)
-	epoch, err := r.health.RequireReady(ctx, policy, proxy, fingerprint)
+	healthResult, err := r.health.RequireReady(ctx, policy, proxy, fingerprint)
 	if err != nil {
 		return ManagedProxyDecision{}, fmt.Errorf("%w: proxy %d: %v", ErrManagedEgressNotReady, policy.ProxyID, err)
 	}
@@ -410,8 +434,11 @@ func (r *managedProxyResolver) resolve(ctx context.Context, requestedAccountID i
 		ProxyClass:         policy.Class,
 		CountryCode:        policy.CountryCode,
 		ExpectedExitIPv4:   policy.ExpectedExitIPv4,
+		DisasterExitIPv4:   policy.DisasterExitIPv4,
+		ObservedExitIPv4:   healthResult.ExitIPv4,
+		HealthState:        healthResult.State,
 		PolicyFingerprint:  fingerprint,
-		HealthEpoch:        epoch,
+		HealthEpoch:        healthResult.Epoch,
 	}, nil
 }
 
@@ -508,6 +535,7 @@ func ManagedProxyFingerprint(policy ManagedProxyPolicy, proxy *Proxy) string {
 		policy.Class,
 		policy.CountryCode,
 		policy.ExpectedExitIPv4,
+		policy.DisasterExitIPv4,
 		proxy.Protocol,
 		proxy.Host,
 		strconv.Itoa(proxy.Port),

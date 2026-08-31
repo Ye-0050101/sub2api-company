@@ -36,6 +36,7 @@ func companyHealthFixture(t *testing.T) (*companyManagedProxyHealth, service.Man
 				Class:            service.ManagedProxyClassInternational,
 				CountryCode:      "US",
 				ExpectedExitIPv4: "8.8.8.8",
+				DisasterExitIPv4: "9.9.9.9",
 			}},
 		},
 	})
@@ -56,7 +57,8 @@ func TestCompanyManagedProxyHealthExpiredFailsClosed(t *testing.T) {
 	health, policy, proxy, fingerprint := companyHealthFixture(t)
 	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}
 	health.states[key] = managedProxyHealthState{
-		ready:     true,
+		status:    service.ManagedProxyHealthReadyPrimary,
+		exitIPv4:  policy.ExpectedExitIPv4,
 		checkedAt: time.Now().Add(-service.ManagedProxyHealthTTL),
 		epoch:     4,
 	}
@@ -67,14 +69,53 @@ func TestCompanyManagedProxyHealthExpiredFailsClosed(t *testing.T) {
 
 func TestCompanyManagedProxyHealthRejectsExitMismatch(t *testing.T) {
 	_, policy, _, _ := companyHealthFixture(t)
-	require.ErrorContains(t, validateCompanyExitEvidence(policy, companyExitEvidence{
+	_, err := validateCompanyExitEvidence(policy, companyExitEvidence{
 		ipA:         "13.52.180.166",
 		ipB:         "13.52.180.166",
 		countryCode: "US",
-	}), "IPv4 mismatch")
-	require.ErrorContains(t, validateCompanyExitEvidence(policy, companyExitEvidence{
+	})
+	require.ErrorContains(t, err, "IPv4 mismatch")
+	_, err = validateCompanyExitEvidence(policy, companyExitEvidence{
 		ipA:         "8.8.8.8",
 		ipB:         "8.8.8.8",
 		countryCode: "SG",
-	}), "country mismatch")
+	})
+	require.ErrorContains(t, err, "country mismatch")
+}
+
+func TestCompanyManagedProxyHealthClassifiesPrimaryAndDisaster(t *testing.T) {
+	_, policy, _, _ := companyHealthFixture(t)
+
+	state, err := validateCompanyExitEvidence(policy, companyExitEvidence{
+		ipA:         policy.ExpectedExitIPv4,
+		ipB:         policy.ExpectedExitIPv4,
+		countryCode: policy.CountryCode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.ManagedProxyHealthReadyPrimary, state)
+
+	state, err = validateCompanyExitEvidence(policy, companyExitEvidence{
+		ipA:         policy.DisasterExitIPv4,
+		ipB:         policy.DisasterExitIPv4,
+		countryCode: policy.CountryCode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.ManagedProxyHealthReadyDisaster, state)
+}
+
+func TestCompanyManagedProxyHealthReturnsCachedDisasterState(t *testing.T) {
+	health, policy, proxy, fingerprint := companyHealthFixture(t)
+	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}
+	health.states[key] = managedProxyHealthState{
+		status:    service.ManagedProxyHealthReadyDisaster,
+		exitIPv4:  policy.DisasterExitIPv4,
+		checkedAt: time.Now(),
+		epoch:     5,
+	}
+
+	result, err := health.RequireReady(t.Context(), policy, proxy, fingerprint)
+	require.NoError(t, err)
+	require.Equal(t, service.ManagedProxyHealthReadyDisaster, result.State)
+	require.Equal(t, policy.DisasterExitIPv4, result.ExitIPv4)
+	require.Equal(t, uint64(5), result.Epoch)
 }

@@ -20,7 +20,7 @@ Account.ID
   -> Account.ProxyID
   -> immutable company policy keyed by ProxyID
   -> existing Proxy record
-  -> ManagedProxyHealth READY
+  -> ManagedProxyHealth READY_PRIMARY / READY_DISASTER
   -> exact provider destination allowlist
   -> CompanyHTTPUpstream or route-aware WS/OAuth factory
   -> socks5h://literal-loopback-IP:port
@@ -41,7 +41,8 @@ company_egress:
     - proxy_id: <US_A_PROXY_ID>
       class: INTERNATIONAL_PROXY
       country_code: US
-      expected_exit_ipv4: <FIXED_PUBLIC_IPV4>
+      expected_exit_ipv4: <PRIMARY_FIXED_PUBLIC_IPV4>
+      disaster_exit_ipv4: <OPTIONAL_DISASTER_FIXED_PUBLIC_IPV4>
 ```
 
 配置只引用现有 `Proxy.ID`。环境相关的 ID 和固定出口 IPv4 不写入源码。
@@ -129,7 +130,8 @@ CN-DIRECT 仍使用内部 socks5h endpoint 进入 sing-box-cn，再由服务器�
 
 RouteHealth 是 runtime 状态，不新增数据库字段：
 
-- `READY`
+- `READY_PRIMARY`
+- `READY_DISASTER`
 - `UNHEALTHY`
 
 唯一编译期探针：
@@ -151,11 +153,18 @@ READY 条件：
 
 ```text
 A.IP == B.IP
-A.IP == expected_exit_ipv4
 B.loc == country_code
+
+A.IP == expected_exit_ipv4
+  -> READY_PRIMARY
+
+A.IP == optional disaster_exit_ipv4
+  -> READY_DISASTER
 ```
 
-IP 必须是 canonical public IPv4。TLS failure、redirect、parse failure、IPv6、私网/保留地址、missing loc、IP disagreement、IP mismatch、country mismatch、Proxy 变化或 health TTL 过期均为 UNHEALTHY/FAIL CLOSED。
+`disaster_exit_ipv4` 最多一个、可省略、必须是与主 IP 不同的 canonical public IPv4。主/灾备实际出口都必须由 Cloudflare `loc` 验证为同一 `country_code`。任何第三个 IP、TLS failure、redirect、parse failure、IPv6、私网/保留地址、missing loc、IP disagreement、country mismatch、Proxy 变化或 health TTL 过期均为 UNHEALTHY/FAIL CLOSED。
+
+协议与灾备自动化由本地 sing-box selector/controller 完成：同一主 IP 内严格按 `AnyTLS -> HY2 -> TUIC`；三者连续失败至少 180 秒才允许切到灾备 AnyTLS。灾备失败选择 BLOCK；主 IP 连续恢复至少 180 秒后自动回切。Sub2API fallback 始终保持 `none`。
 
 - startup preflight：所有配置 Proxy 必须先通过
 - periodic probe interval：60 秒

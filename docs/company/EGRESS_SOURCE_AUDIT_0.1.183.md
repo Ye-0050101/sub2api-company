@@ -17,7 +17,7 @@ Company patch
   -> supported platform/type
   -> official base URL + exact destination
   -> ProxyID policy + current Proxy invariants
-  -> ManagedProxyHealth READY
+  -> ManagedProxyHealth READY_PRIMARY / READY_DISASTER
   -> CompanyHTTPUpstream
   -> proxyurl.Parse/proxyutil
   -> local socks5h
@@ -122,6 +122,7 @@ ProxyID (unique in config)
 class
 country_code
 expected_exit_ipv4
+disaster_exit_ipv4 (optional, at most one)
 ```
 
 Account.ProxyID 必须精确匹配 policy ProxyID；shadow account 与 parent ProxyID 必须一致。
