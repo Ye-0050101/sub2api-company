@@ -23,6 +23,8 @@ done
 
 actual_sha=$(sha256sum "$binary" | awk '{print $1}')
 [[ $actual_sha == "$expected_sha" ]] || { echo "Binary SHA256 mismatch" >&2; exit 1; }
+version_output=$("$binary" -version 2>&1 || true)
+grep -Fq "company-" <<<"$version_output" || { echo "Refusing: binary is not a Company build" >&2; exit 1; }
 
 service_user=$(systemctl show sub2api.service -p User --value)
 service_group=$(systemctl show sub2api.service -p Group --value)
@@ -74,7 +76,7 @@ rollback() {
 }
 
 systemctl restart sub2api.service || rollback
-for _ in $(seq 1 20); do
+for _ in $(seq 1 60); do
   if systemctl is-active --quiet sub2api.service && \
      curl --noproxy '*' --fail --silent --max-time 2 http://127.0.0.1:8080/health >/dev/null; then
     echo "Sub2API deployment healthy: $expected_sha"

@@ -36,6 +36,13 @@ PROTECTED_FILES = (
     "backend/internal/repository/company_oauth_client.go",
 )
 
+SERVER_OPERATION_SCRIPTS = (
+    "deploy/company-bootstrap-cn.sh",
+    "deploy/company-activate-egress.sh",
+    "deploy/company-deploy-egress.sh",
+    "deploy/company-verify-egress.sh",
+)
+
 RULES = {
     "http-default-client": re.compile(r"\bhttp\.DefaultClient\b"),
     "raw-proxy-url-parser": re.compile(
@@ -66,6 +73,21 @@ REQUIRED_SOURCE = {
     ".github/workflows/backend-ci.yml": (
         "-X main.Version=company-${GITHUB_SHA}",
         "-X main.BuildType=company",
+    ),
+    "deploy/company-bootstrap-cn.sh": (
+        "--confirm-first-install",
+        "bundle SHA256 mismatch",
+        "binary SHA256 mismatch",
+        "Next: company-activate-egress.sh",
+    ),
+    "deploy/company-activate-egress.sh": (
+        "COMPANY_CN_DNS_IPV4_1",
+        "sub2api_egress_guard",
+        "COMPANY_EGRESS_ACTIVATED=1",
+    ),
+    "deploy/company-export-migration.sh": (
+        "--stop-application",
+        "SOURCE_APPLICATION_STOPPED=1",
     ),
     "backend/cmd/server/wire_gen.go": (
         "repository.NewCompanyHTTPUpstream(",
@@ -175,6 +197,16 @@ FORBIDDEN_WIRING = (
 
 def main() -> int:
     failures: list[str] = []
+
+    for relative_path in SERVER_OPERATION_SCRIPTS:
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        if (
+            "github.com" in text
+            or "githubusercontent.com" in text
+            or "api.github.com" in text
+            or "git clone" in text
+        ):
+            failures.append(f"{relative_path}: server operation script must not access GitHub")
     for relative in PROTECTED_FILES:
         path = ROOT / relative
         if not path.is_file():

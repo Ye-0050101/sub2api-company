@@ -151,6 +151,15 @@
 - `deploy/company-verify-egress.sh`
   - 只读检查 binary/config SHA、systemd、SOCKS listener、UID nftables、IPv6/DNS deny 和当前连接
 
+首次迁移另提供参数化入口：
+
+- `deploy/company-export-migration.sh`：源服务器停写并生成 root-only 迁移包
+- `deploy/company-bootstrap-cn.sh`：目标中国服务器基础安装、SHA校验和数据库恢复
+- `deploy/company-activate-egress.sh`：按 root-only env 生成CN/US guard、启动应用和可选TLS
+- `deploy/company-server.env.example`：只含占位符；真实IP、DNS和域名不得提交GitHub
+
+服务器运维脚本由静态门禁止访问 GitHub；中国服务器只接受经本机/GitHub Actions验证后通过SCP上传的artifact。
+
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
 本机更新命令：

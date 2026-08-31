@@ -16,6 +16,9 @@ jobs:
         run: |
           /bin/bash -n deploy/company-deploy-egress.sh
           /bin/bash -n deploy/company-verify-egress.sh
+          /bin/bash -n deploy/company-export-migration.sh
+          /bin/bash -n deploy/company-bootstrap-cn.sh
+          /bin/bash -n deploy/company-activate-egress.sh
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
