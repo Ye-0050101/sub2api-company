@@ -19,6 +19,11 @@ jobs:
           /bin/bash -n deploy/company-export-migration.sh
           /bin/bash -n deploy/company-bootstrap-cn.sh
           /bin/bash -n deploy/company-activate-egress.sh
+          /bin/bash -n deploy/company-install-fresh.sh
+          /bin/bash -n deploy/company-route-apply.sh
+          python3 deploy/tests/company-route-test.py
+          python3 -m json.tool deploy/company-route.example.json >/dev/null
+          python3 -m json.tool deploy/company-subscription.selected.example.json >/dev/null
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
@@ -138,10 +143,19 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embed \
             -trimpath -ldflags="-s -w -X main.Version=company-${GITHUB_SHA} -X main.Commit=${GITHUB_SHA} -X main.BuildType=company" \
             -o ../dist/sub2api-linux-amd64 ./cmd/server
+          mkdir -p ../dist/company-ops
+          install -m 0755 ../deploy/company-deploy-egress.sh ../dist/company-ops/company-deploy-egress
+          install -m 0755 ../deploy/company-verify-egress.sh ../dist/company-ops/company-verify-egress
+          install -m 0755 ../deploy/company-route.py ../dist/company-ops/company-route
+          install -m 0755 ../deploy/company-route-apply.sh ../dist/company-ops/company-route-add
+          (
+            cd ../dist/company-ops
+            sha256sum company-deploy-egress company-verify-egress company-route company-route-add > SHA256SUMS
+          )
       - name: Upload verified company website binary
         uses: actions/upload-artifact@v7
         with:
           name: sub2api-linux-amd64-${{ github.sha }}
-          path: dist/sub2api-linux-amd64
+          path: dist/
           if-no-files-found: error
           retention-days: 14

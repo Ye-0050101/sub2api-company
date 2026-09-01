@@ -103,6 +103,50 @@ $binaryPath = Join-Path $extractDir 'sub2api-linux-amd64'
 if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) { throw 'Artifact binary is missing.' }
 $binarySha = (Get-FileHash -Algorithm SHA256 -LiteralPath $binaryPath).Hash.ToLowerInvariant()
 
+$opsDir = Join-Path $extractDir 'company-ops'
+$opsManifestPath = Join-Path $opsDir 'SHA256SUMS'
+$requiredOps = @(
+    'company-deploy-egress',
+    'company-verify-egress',
+    'company-route',
+    'company-route-add'
+)
+if (-not (Test-Path -LiteralPath $opsManifestPath -PathType Leaf)) {
+    throw 'Company operations SHA256SUMS is missing.'
+}
+$actualOpsFiles = @(
+    Get-ChildItem -LiteralPath $opsDir |
+        ForEach-Object Name |
+        Sort-Object
+)
+$expectedOpsFiles = @($requiredOps + 'SHA256SUMS' | Sort-Object)
+if (Compare-Object -ReferenceObject $expectedOpsFiles -DifferenceObject $actualOpsFiles) {
+    throw 'Company operations artifact contains missing or unexpected files.'
+}
+$manifestEntries = @{}
+foreach ($line in Get-Content -LiteralPath $opsManifestPath) {
+    if ($line -notmatch '^([0-9a-f]{64})  ([a-z0-9-]+)$') {
+        throw "Invalid operations manifest line: $line"
+    }
+    if ($manifestEntries.ContainsKey($Matches[2])) {
+        throw "Duplicate operations manifest entry: $($Matches[2])"
+    }
+    $manifestEntries[$Matches[2]] = $Matches[1]
+}
+if ($manifestEntries.Count -ne $requiredOps.Count) {
+    throw 'Operations manifest entry count is invalid.'
+}
+foreach ($name in $requiredOps) {
+    if (-not $manifestEntries.ContainsKey($name)) {
+        throw "Operations manifest is missing $name"
+    }
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $opsDir $name)).Hash.ToLowerInvariant()
+    if ($actualHash -ne $manifestEntries[$name]) {
+        throw "Operations file hash mismatch: $name"
+    }
+}
+$opsManifestSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $opsManifestPath).Hash.ToLowerInvariant()
+
 try {
     Invoke-Checked git @('switch', 'main')
     Invoke-Checked git @('merge', '--ff-only', $targetSha)
@@ -122,6 +166,8 @@ $manifest = [ordered]@{
     upstream_commit = $targetSha
     binary_sha256   = $binarySha
     binary_path     = $binaryPath
+    ops_path        = $opsDir
+    ops_sha256      = $opsManifestSha
     ci_url          = $ciRun.html_url
     security_url    = $securityRun.html_url
 }
@@ -129,4 +175,6 @@ $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $distDir 'lates
 Write-Host "Company repository updated: $companyCommit"
 Write-Host "Verified Linux website binary: $binaryPath"
 Write-Host "SHA256: $binarySha"
+Write-Host "Verified Company operations: $opsDir"
+Write-Host "Operations manifest SHA256: $opsManifestSha"
 Write-Host 'No server operation was performed.'

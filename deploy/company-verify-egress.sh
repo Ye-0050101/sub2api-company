@@ -41,6 +41,35 @@ probe_exit() {
   [[ $ip_a == "$expected_ip" && $ip_b == "$expected_ip" && $country == "$expected_country" ]]
 }
 
+probe_managed_route() {
+  local label=$1 port=$2 expected_primary=$3 expected_disaster=$4 expected_country=$5
+  local probe_a trace
+  probe_a=$(curl --proto '=https' -fsS --connect-timeout 8 --max-time 20 \
+    --noproxy '' --proxy "socks5h://127.0.0.1:$port" \
+    'https://api.ipify.org?format=json') || return 1
+  trace=$(curl --proto '=https' -fsS --connect-timeout 8 --max-time 20 \
+    --noproxy '' --proxy "socks5h://127.0.0.1:$port" \
+    'https://cloudflare.com/cdn-cgi/trace') || return 1
+  python3 - "$label" "$probe_a" "$trace" "$expected_primary" \
+    "$expected_disaster" "$expected_country" <<'PY'
+import ipaddress, json, sys
+label, raw_a, raw_b, primary, disaster, country = sys.argv[1:]
+a = str(json.loads(raw_a).get("ip") or "")
+trace = dict(line.split("=", 1) for line in raw_b.splitlines() if "=" in line)
+b = trace.get("ip", "")
+allowed = {primary}
+if disaster:
+    allowed.add(disaster)
+for value in (a, b):
+    address = ipaddress.ip_address(value)
+    if address.version != 4 or str(address) != value or not address.is_global:
+        raise SystemExit(1)
+if a != b or a not in allowed or trace.get("loc") != country:
+    raise SystemExit(1)
+print(f"INFO {label} exit={a} country={country}")
+PY
+}
+
 failures=0
 check() {
   local label=$1
@@ -76,6 +105,36 @@ fi
 if [[ -n $public_domain ]]; then
   check "public HTTPS health" curl --proto '=https' -fsS --max-time 20 \
     "https://$public_domain/health"
+fi
+
+if [[ -d /etc/sub2api-egress/routes ]]; then
+  for metadata in /etc/sub2api-egress/routes/*/metadata.json; do
+    [[ -f $metadata ]] || continue
+    route_fields=$(python3 - "$metadata" <<'PY'
+import json, pathlib, sys
+route = json.loads(pathlib.Path(sys.argv[1]).read_text())
+values = [
+    route["route_key"],
+    str(route["proxy_id"]),
+    str(route["socks_port"]),
+    route["expected_exit_ipv4"],
+    route.get("disaster_exit_ipv4", ""),
+    route["country_code"],
+]
+if any("|" in value for value in values):
+    raise SystemExit("invalid route metadata")
+print("|".join(values))
+PY
+) || { echo "FAIL invalid route metadata $metadata"; failures=$((failures + 1)); continue; }
+    IFS='|' read -r route_key proxy_id route_port primary_ip disaster_ip route_country \
+      <<<"$route_fields"
+    check "$route_key egress service" systemctl is-active --quiet "sub2api-egress-$route_key.service"
+    check "$route_key failover timer" systemctl is-active --quiet "sub2api-route-$route_key-failover.timer"
+    check "$route_key guard table" nft list table inet "sub2api_${route_key//-/_}_guard"
+    check "$route_key fixed exit" probe_managed_route "$route_key" "$route_port" \
+      "$primary_ip" "$disaster_ip" "$route_country"
+    echo "INFO $route_key proxy_id=$proxy_id socks=127.0.0.1:$route_port"
+  done
 fi
 
 for candidate in /opt/sub2api/config.yaml /opt/sub2api/.env; do

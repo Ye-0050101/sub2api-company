@@ -58,11 +58,30 @@ func main() {
 
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
+	companyBootstrapFresh := flag.Bool(
+		"company-bootstrap-fresh",
+		false,
+		"Initialize an empty Company database/config from environment variables and exit",
+	)
 	showVersion := flag.Bool("version", false, "Show version information")
 	flag.Parse()
 
 	if *showVersion {
 		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		return
+	}
+
+	if *companyBootstrapFresh {
+		if !strings.EqualFold(strings.TrimSpace(BuildType), "company") {
+			log.Fatal("Company fresh bootstrap is available only in a Company build")
+		}
+		if !setup.NeedsSetup() {
+			log.Fatal("Company fresh bootstrap refused: installation already exists")
+		}
+		if err := setup.AutoSetupFromEnv(); err != nil {
+			log.Fatalf("Company fresh bootstrap failed: %v", err)
+		}
+		log.Println("Company fresh bootstrap completed; normal server startup was not attempted")
 		return
 	}
 

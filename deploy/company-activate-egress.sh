@@ -20,10 +20,8 @@ source "$env_file"
 set +a
 
 for name in COMPANY_DOMAIN COMPANY_CN_EXIT_IPV4 COMPANY_CN_DNS_IPV4_1 \
-  COMPANY_CN_DNS_IPV4_2 COMPANY_US_EXIT_IPV4 COMPANY_US_NODE_IPV4 \
-  COMPANY_US_ANYTLS_PORT COMPANY_US_HY2_PORT COMPANY_US_TUIC_PORT \
-  COMPANY_DATABASE_NAME COMPANY_US_PROXY_ID COMPANY_CN_PROXY_ID \
-  COMPANY_US_SOCKS_PORT COMPANY_CN_SOCKS_PORT COMPANY_ENABLE_PUBLIC_TLS
+  COMPANY_CN_DNS_IPV4_2 COMPANY_DATABASE_NAME COMPANY_CN_PROXY_ID \
+  COMPANY_CN_SOCKS_PORT COMPANY_ENABLE_PUBLIC_TLS
 do
   [[ -n ${!name:-} ]] || die "missing $name"
 done
@@ -32,12 +30,23 @@ done
 stage=/var/lib/sub2api-company-bootstrap
 singbox=/opt/sub2api-egress/bin/sing-box
 [[ -x /opt/sub2api/sub2api && -x $singbox && -f /opt/sub2api/config.yaml ]] || die "bootstrap base is incomplete"
-[[ -d $stage && -f $stage/systemd/sub2api-egress-us-a.service ]] || die "migration stage is missing"
 [[ $(systemctl show sub2api.service -p LoadState --value) == not-found ]] || die "Sub2API is already activated"
 
-us_uid=$(id -u sub2api-egress-us-a)
+migration_us=0
+if [[ -f $stage/systemd/sub2api-egress-us-a.service ]]; then
+  migration_us=1
+  for name in COMPANY_US_EXIT_IPV4 COMPANY_US_NODE_IPV4 COMPANY_US_ANYTLS_PORT \
+    COMPANY_US_HY2_PORT COMPANY_US_TUIC_PORT COMPANY_US_PROXY_ID COMPANY_US_SOCKS_PORT
+  do
+    [[ -n ${!name:-} ]] || die "missing $name for migrated US route"
+  done
+fi
+
 cn_uid=$(id -u sub2api-egress-cn)
 app_uid=$(id -u sub2api)
+if [[ $migration_us -eq 1 ]]; then
+  us_uid=$(id -u sub2api-egress-us-a)
+fi
 
 install -d -o root -g sub2api-egress-cn -m 0750 /etc/sub2api-egress/cn
 cat >/etc/sub2api-egress/cn/config.json <<JSON
@@ -103,7 +112,8 @@ CapabilityBoundingSet=
 WantedBy=multi-user.target
 UNIT
 
-install -m 0644 "$stage/systemd/sub2api-egress-us-a.service" /etc/systemd/system/sub2api-egress-us-a.service
+if [[ $migration_us -eq 1 ]]; then
+  install -m 0644 "$stage/systemd/sub2api-egress-us-a.service" /etc/systemd/system/sub2api-egress-us-a.service
 install -m 0644 "$stage/systemd/sub2api-us-a-failover.service" /etc/systemd/system/sub2api-us-a-failover.service
 install -m 0644 "$stage/systemd/sub2api-us-a-failover.timer" /etc/systemd/system/sub2api-us-a-failover.timer
 
@@ -141,6 +151,12 @@ cat >/etc/systemd/system/sub2api-egress-us-a.service.d/10-guard.conf <<'UNIT'
 Requires=sub2api-us-a-guard.service
 After=sub2api-us-a-guard.service
 UNIT
+fi
+
+APP_SOCKS_PORTS=$COMPANY_CN_SOCKS_PORT
+if [[ $migration_us -eq 1 ]]; then
+  APP_SOCKS_PORTS="$COMPANY_US_SOCKS_PORT, $COMPANY_CN_SOCKS_PORT"
+fi
 
 install -d -m 0750 /etc/sub2api-egress/sub2api
 cat >/etc/sub2api-egress/sub2api/guard.nft <<NFT
@@ -150,7 +166,7 @@ table inet sub2api_egress_guard {
   meta skuid $app_uid udp dport 53 counter reject
   meta skuid $app_uid tcp dport 53 counter reject
   meta skuid $app_uid oifname "lo" ct state established,related counter accept
-  meta skuid $app_uid oifname "lo" ip daddr 127.0.0.1 tcp dport { 5432, 6379, $COMPANY_US_SOCKS_PORT, $COMPANY_CN_SOCKS_PORT } counter accept
+  meta skuid $app_uid oifname "lo" ip daddr 127.0.0.1 tcp dport { 5432, 6379, $APP_SOCKS_PORTS } counter accept
   meta skuid $app_uid counter reject
  }
 }
@@ -176,8 +192,8 @@ UNIT
 cat >/etc/systemd/system/sub2api.service <<'UNIT'
 [Unit]
 Description=Sub2API Company
-After=network-online.target postgresql.service redis-server.service sub2api-egress-guard.service sub2api-egress-us-a.service sub2api-egress-cn.service
-Requires=postgresql.service redis-server.service sub2api-egress-guard.service sub2api-egress-us-a.service sub2api-egress-cn.service
+After=network-online.target postgresql.service redis-server.service sub2api-egress-guard.service sub2api-egress-cn.service
+Requires=postgresql.service redis-server.service sub2api-egress-guard.service sub2api-egress-cn.service
 [Service]
 Type=simple
 User=sub2api
@@ -205,9 +221,18 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now sub2api-cn-guard.service sub2api-egress-cn.service
-systemctl enable --now sub2api-us-a-guard.service sub2api-egress-us-a.service
-systemctl start sub2api-us-a-failover.service
-systemctl enable --now sub2api-us-a-failover.timer
+if [[ $migration_us -eq 1 ]]; then
+  install -d -m 0755 /etc/systemd/system/sub2api.service.d
+  cat >/etc/systemd/system/sub2api.service.d/20-company-migrated-us.conf <<'UNIT'
+[Unit]
+Requires=sub2api-egress-us-a.service
+After=sub2api-egress-us-a.service
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now sub2api-us-a-guard.service sub2api-egress-us-a.service
+  systemctl start sub2api-us-a-failover.service
+  systemctl enable --now sub2api-us-a-failover.timer
+fi
 systemctl enable --now sub2api-egress-guard.service sub2api.service
 
 for _ in $(seq 1 60); do
@@ -254,4 +279,8 @@ HOOK
 fi
 
 echo "COMPANY_EGRESS_ACTIVATED=1"
-echo "Verify with: company-verify-egress --us-socks-port $COMPANY_US_SOCKS_PORT --us-exit-ip $COMPANY_US_EXIT_IPV4 --cn-socks-port $COMPANY_CN_SOCKS_PORT --cn-exit-ip $COMPANY_CN_EXIT_IPV4 --domain $COMPANY_DOMAIN"
+if [[ $migration_us -eq 1 ]]; then
+  echo "Verify with: company-verify-egress --us-socks-port $COMPANY_US_SOCKS_PORT --us-exit-ip $COMPANY_US_EXIT_IPV4 --cn-socks-port $COMPANY_CN_SOCKS_PORT --cn-exit-ip $COMPANY_CN_EXIT_IPV4 --domain $COMPANY_DOMAIN"
+else
+  echo "Verify with: company-verify-egress --cn-socks-port $COMPANY_CN_SOCKS_PORT --cn-exit-ip $COMPANY_CN_EXIT_IPV4"
+fi

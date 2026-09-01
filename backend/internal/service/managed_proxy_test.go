@@ -148,6 +148,29 @@ func TestNewManagedProxyPoliciesInternationalCountries(t *testing.T) {
 	})
 }
 
+func TestNewManagedProxyPoliciesAllowsMultipleRoutesSameCountry(t *testing.T) {
+	cfg := managedProxyConfig(7)
+	second := cfg.CompanyEgress.ManagedProxies[0]
+	second.ProxyID = 8
+	second.ExpectedExitIPv4 = "1.1.1.1"
+	second.DisasterExitIPv4 = "9.9.9.9"
+	cfg.CompanyEgress.ManagedProxies = append(cfg.CompanyEgress.ManagedProxies, second)
+
+	policies, err := NewManagedProxyPolicies(cfg)
+	require.NoError(t, err)
+	require.Len(t, policies.Entries(), 2)
+
+	firstPolicy, ok := policies.Lookup(7)
+	require.True(t, ok)
+	secondPolicy, ok := policies.Lookup(8)
+	require.True(t, ok)
+	require.Equal(t, "US", firstPolicy.CountryCode)
+	require.Equal(t, "US", secondPolicy.CountryCode)
+	require.NotEqual(t, firstPolicy.ProxyID, secondPolicy.ProxyID)
+	require.NotEqual(t, firstPolicy.ExpectedExitIPv4, secondPolicy.ExpectedExitIPv4)
+	require.Equal(t, "9.9.9.9", secondPolicy.DisasterExitIPv4)
+}
+
 func TestValidateManagedProxyFailsClosed(t *testing.T) {
 	policy := ManagedProxyPolicy{ProxyID: 7}
 	tests := []struct {

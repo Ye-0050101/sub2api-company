@@ -1,0 +1,40 @@
+{
+  "outbounds": [
+    {
+      "type": "anytls",
+      "tag": "us-a-anytls",
+      "server": "<LITERAL_NODE_IPV4_A>",
+      "server_port": 443,
+      "password": "<REPLACE>",
+      "tls": {
+        "enabled": true,
+        "server_name": "node-a.example.com",
+        "insecure": false
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "us-a-hy2",
+      "server": "<LITERAL_NODE_IPV4_A>",
+      "server_port": 8443,
+      "password": "<REPLACE>",
+      "tls": {
+        "enabled": true,
+        "server_name": "node-a.example.com",
+        "insecure": false
+      }
+    },
+    {
+      "type": "anytls",
+      "tag": "us-b-anytls",
+      "server": "<LITERAL_NODE_IPV4_B>",
+      "server_port": 443,
+      "password": "<REPLACE>",
+      "tls": {
+        "enabled": true,
+        "server_name": "node-b.example.com",
+        "insecure": false
+      }
+    }
+  ]
+}

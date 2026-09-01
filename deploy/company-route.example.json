@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "route_key": "us-a",
+  "country_code": "US",
+  "proxy_id": 10,
+  "socks_port": 11000,
+  "api_port": 19000,
+  "expected_exit_ipv4": "<PRIMARY_FIXED_PUBLIC_IPV4_A>",
+  "disaster_exit_ipv4": "<OPTIONAL_SAME_COUNTRY_PUBLIC_IPV4_B>",
+  "failure_threshold": 3,
+  "candidates": [
+    {
+      "subscription_tag": "us-a-anytls",
+      "role": "primary",
+      "priority": 10,
+      "probe_port": 11001
+    },
+    {
+      "subscription_tag": "us-a-hy2",
+      "role": "primary",
+      "priority": 20,
+      "probe_port": 11002
+    },
+    {
+      "subscription_tag": "us-b-anytls",
+      "role": "disaster",
+      "priority": 100,
+      "probe_port": 11003
+    }
+  ]
+}

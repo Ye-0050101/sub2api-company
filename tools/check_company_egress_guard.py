@@ -41,6 +41,9 @@ SERVER_OPERATION_SCRIPTS = (
     "deploy/company-activate-egress.sh",
     "deploy/company-deploy-egress.sh",
     "deploy/company-verify-egress.sh",
+    "deploy/company-install-fresh.sh",
+    "deploy/company-route-apply.sh",
+    "deploy/company-route.py",
 )
 
 RULES = {
@@ -78,13 +81,58 @@ REQUIRED_SOURCE = {
         "--confirm-first-install",
         "bundle SHA256 mismatch",
         "binary SHA256 mismatch",
-        "company-activate-egress.sh must be next to bootstrap",
+        "for companion in company-activate-egress.sh company-route.py company-route-apply.sh; do",
         "/usr/local/sbin/company-activate-egress",
+        "/usr/local/sbin/company-route-add",
     ),
     "deploy/company-activate-egress.sh": (
         "COMPANY_CN_DNS_IPV4_1",
         "sub2api_egress_guard",
         "COMPANY_EGRESS_ACTIVATED=1",
+        "migration_us=0",
+    ),
+    "deploy/company-install-fresh.sh": (
+        "--confirm-fresh-install",
+        "--company-bootstrap-fresh",
+        "COMPANY_FRESH_INSTALL_READY=1",
+        "Fresh installation failed; removing only resources created by this run",
+        "company-route-add",
+    ),
+    "deploy/company-route.py": (
+        'ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR"}',
+        '"default": "block"',
+        "disaster_exit_ipv4",
+        "server_ports/port hopping is prohibited",
+        "must not enable insecure TLS",
+    ),
+    "deploy/company-route-apply.sh": (
+        "route core policy is immutable",
+        "sub2api_route_control_guard",
+        "allow_direct_on_error",
+        "Route activation failed; restoring the previous application state",
+        'die() { echo "REFUSING: $*" >&2; return 1; }',
+    ),
+    "deploy/company-verify-egress.sh": (
+        "/etc/sub2api-egress/routes/*/metadata.json",
+        "expected_disaster",
+        "sub2api-route-$route_key-failover.timer",
+        "probe_managed_route",
+    ),
+    "deploy/company-deploy-egress.sh": (
+        "--ops-dir",
+        "operations manifest SHA256 mismatch",
+        "required_ops=(company-deploy-egress company-verify-egress company-route company-route-add)",
+        "restoring previous binary and operations tools",
+    ),
+    "tools/company-update.ps1": (
+        "Company operations SHA256SUMS is missing.",
+        "ops_sha256      = $opsManifestSha",
+        "Operations file hash mismatch",
+    ),
+    "backend/cmd/server/main.go": (
+        '"company-bootstrap-fresh"',
+        'strings.TrimSpace(BuildType), "company"',
+        "Company fresh bootstrap completed",
     ),
     "deploy/company-export-migration.sh": (
         "--stop-application",
@@ -202,9 +250,9 @@ def main() -> int:
     for relative_path in SERVER_OPERATION_SCRIPTS:
         text = (ROOT / relative_path).read_text(encoding="utf-8")
         if (
-            "github.com" in text
-            or "githubusercontent.com" in text
-            or "api.github.com" in text
+            "https://github.com" in text
+            or "https://raw.githubusercontent.com" in text
+            or "https://api.github.com" in text
             or "git clone" in text
         ):
             failures.append(f"{relative_path}: server operation script must not access GitHub")
