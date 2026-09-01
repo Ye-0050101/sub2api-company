@@ -36,7 +36,7 @@
 - 已取得批准版本的 sing-box Linux amd64 binary；
 - binary、sing-box、部署脚本和 env 通过 SCP/内网文件传输上传，不从服务器下载 GitHub 内容。
 
-准备 root-only 配置：
+准备 root-only 配置。管理员密码和数据库密码均至少 12 个字符：
 
 ~~~bash
 cp deploy/company-server.env.example /root/company-server.env

@@ -51,10 +51,10 @@ done
 [[ $COMPANY_DATABASE_USER =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || die "invalid database user"
 [[ $COMPANY_ADMIN_EMAIL == *@* && $COMPANY_ADMIN_EMAIL != admin@example.com ]] ||
   die "replace the example admin email"
-[[ ${#COMPANY_ADMIN_PASSWORD} -ge 16 && $COMPANY_ADMIN_PASSWORD != *REPLACE* ]] ||
-  die "admin password must be a non-example value with at least 16 characters"
-[[ ${#COMPANY_DATABASE_PASSWORD} -ge 24 && $COMPANY_DATABASE_PASSWORD != *REPLACE* ]] ||
-  die "database password must be a non-example value with at least 24 characters"
+[[ ${#COMPANY_ADMIN_PASSWORD} -ge 12 && $COMPANY_ADMIN_PASSWORD != *REPLACE* ]] ||
+  die "admin password must be a non-example value with at least 12 characters"
+[[ ${#COMPANY_DATABASE_PASSWORD} -ge 12 && $COMPANY_DATABASE_PASSWORD != *REPLACE* ]] ||
+  die "database password must be a non-example value with at least 12 characters"
 [[ $COMPANY_CN_PROXY_ID =~ ^[1-9][0-9]*$ ]] || die "invalid CN ProxyID"
 [[ $COMPANY_CN_SOCKS_PORT =~ ^[1-9][0-9]*$ ]] || die "invalid CN SOCKS port"
 [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 || $COMPANY_ENABLE_PUBLIC_TLS == 1 ]] ||
