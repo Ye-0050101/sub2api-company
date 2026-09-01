@@ -208,4 +208,4 @@ install -o root -g root -m 0755 "$script_dir/company-install-fresh.sh"   /usr/lo
 fresh_complete=1
 trap - ERR INT TERM
 echo "COMPANY_FRESH_INSTALL_READY=1"
-echo "Next: add each US/SG/JP/KR fixed-exit route with company-route-add."
+echo "Next: add each US/SG/JP/KR/HK/TW fixed-exit route with company-route-add."

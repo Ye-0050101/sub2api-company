@@ -128,7 +128,7 @@ func TestNewManagedProxyPoliciesRejectsUnsafeStartupConfig(t *testing.T) {
 }
 
 func TestNewManagedProxyPoliciesInternationalCountries(t *testing.T) {
-	for _, countryCode := range []string{"JP", "KR"} {
+	for _, countryCode := range []string{"JP", "KR", "HK", "TW"} {
 		t.Run(countryCode, func(t *testing.T) {
 			cfg := managedProxyConfig(7)
 			cfg.CompanyEgress.ManagedProxies[0].CountryCode = countryCode

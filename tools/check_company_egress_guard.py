@@ -99,7 +99,7 @@ REQUIRED_SOURCE = {
         "company-route-add",
     ),
     "deploy/company-route.py": (
-        'ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR"}',
+        'ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR", "HK", "TW"}',
         '"default": "block"',
         "disaster_exit_ipv4",
         "server_ports/port hopping is prohibited",
@@ -177,13 +177,13 @@ REQUIRED_SOURCE = {
     ),
     "backend/internal/service/managed_proxy.go": (
         "OpenAI PAT and Agent Identity are outside Company Egress V1",
-        'case "US", "SG", "JP", "KR":',
+        'case "US", "SG", "JP", "KR", "HK", "TW":',
         "disaster_exit_ipv4 must differ from expected_exit_ipv4",
         "policy.DisasterExitIPv4",
     ),
     "backend/internal/service/managed_proxy_test.go": (
         "TestNewManagedProxyPoliciesInternationalCountries",
-        '[]string{"JP", "KR"}',
+        '[]string{"JP", "KR", "HK", "TW"}',
         'CountryCode = "DE"',
     ),
     "backend/internal/service/update_service.go": (

@@ -78,6 +78,17 @@ def route_spec(route_key="us-a", proxy_id=11, socks_port=11000):
 
 
 class CompanyRouteTest(unittest.TestCase):
+    def test_all_approved_international_countries(self):
+        for index, country in enumerate(("US", "SG", "JP", "KR", "HK", "TW")):
+            spec = route_spec(
+                route_key=f"{country.lower()}-a",
+                proxy_id=20 + index,
+                socks_port=12000 + index * 100,
+            )
+            spec["country_code"] = country
+            route = company_route.normalize(spec, subscription())
+            self.assertEqual(route["country_code"], country)
+
     def test_same_country_supports_multiple_independent_proxy_ids(self):
         first = company_route.normalize(route_spec(), subscription())
         second = company_route.normalize(
@@ -128,7 +139,7 @@ class CompanyRouteTest(unittest.TestCase):
 
         unknown = route_spec()
         unknown["country_code"] = "DE"
-        with self.assertRaisesRegex(company_route.RouteError, "US, SG, JP, or KR"):
+        with self.assertRaisesRegex(company_route.RouteError, "US, SG, JP, KR, HK, or TW"):
             company_route.normalize(unknown, subscription())
 
     def test_render_contains_no_plaintext_subscription_file(self):

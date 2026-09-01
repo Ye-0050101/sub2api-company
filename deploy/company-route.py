@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR"}
+ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR", "HK", "TW"}
 ALLOWED_PROTOCOLS = {"anytls": "tcp", "hysteria2": "udp", "tuic": "udp"}
 ROUTE_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,15}$")
 HOSTNAME_RE = re.compile(
@@ -119,7 +119,7 @@ def normalize(spec: dict, subscription: dict) -> dict:
         raise RouteError("route_key must match [a-z][a-z0-9-]{1,15}")
     country = str(spec.get("country_code") or "").strip().upper()
     if country not in ALLOWED_COUNTRIES:
-        raise RouteError("country_code must be US, SG, JP, or KR")
+        raise RouteError("country_code must be US, SG, JP, KR, HK, or TW")
     proxy_id = int(spec.get("proxy_id") or 0)
     if proxy_id <= 0:
         raise RouteError("proxy_id must be positive")
