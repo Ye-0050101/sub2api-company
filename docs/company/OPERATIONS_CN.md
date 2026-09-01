@@ -19,7 +19,7 @@ company-export-migration.sh --stop-application
 目标服务器准备 `/root/company-server.env`（从 `deploy/company-server.env.example` 复制，权限 `0600`），上传迁移包和CI binary后：
 
 ```bash
-company-bootstrap-cn.sh \
+./company-bootstrap-cn.sh \
   --env /root/company-server.env \
   --bundle /root/sub2api-company-migration-<timestamp>.tar.gz \
   --bundle-sha256 <sha256> \
@@ -27,7 +27,7 @@ company-bootstrap-cn.sh \
   --binary-sha256 <sha256> \
   --confirm-first-install
 
-company-activate-egress.sh --env /root/company-server.env
+/usr/local/sbin/company-activate-egress --env /root/company-server.env
 ```
 
 两阶段是安全门，不是手工配置：base阶段失败不会开放网络；activate阶段只在数据库和配置完成后加载guard并启动服务。

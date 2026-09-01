@@ -78,7 +78,8 @@ REQUIRED_SOURCE = {
         "--confirm-first-install",
         "bundle SHA256 mismatch",
         "binary SHA256 mismatch",
-        "Next: company-activate-egress.sh",
+        "company-activate-egress.sh must be next to bootstrap",
+        "/usr/local/sbin/company-activate-egress",
     ),
     "deploy/company-activate-egress.sh": (
         "COMPANY_CN_DNS_IPV4_1",

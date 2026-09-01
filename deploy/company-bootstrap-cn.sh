@@ -7,6 +7,7 @@ bundle_sha=""
 binary=""
 binary_sha=""
 confirmed=0
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,6 +34,7 @@ require_var() { [[ -n ${!1:-} ]] || die "missing $1 in $env_file"; }
 [[ $binary == /* && -f $binary && -n $binary_sha ]] || die "binary and SHA256 are required"
 [[ $(sha256sum "$bundle" | awk '{print $1}') == "$bundle_sha" ]] || die "bundle SHA256 mismatch"
 [[ $(sha256sum "$binary" | awk '{print $1}') == "$binary_sha" ]] || die "binary SHA256 mismatch"
+[[ -f $script_dir/company-activate-egress.sh ]] || die "company-activate-egress.sh must be next to bootstrap"
 
 set -a
 # shellcheck disable=SC1090
@@ -114,6 +116,8 @@ install -m 0750 "$stage/scripts/sub2api-us-a-failover" /usr/local/sbin/sub2api-u
 for script in company-deploy-egress company-verify-egress; do
   [[ -f $stage/scripts/$script ]] && install -m 0755 "$stage/scripts/$script" "/usr/local/sbin/$script"
 done
+install -m 0755 "$script_dir/company-activate-egress.sh" /usr/local/sbin/company-activate-egress
+install -m 0755 "$script_dir/company-bootstrap-cn.sh" /usr/local/sbin/company-bootstrap-cn
 
 db_password=$(python3 - <<'PY'
 from pathlib import Path
@@ -183,4 +187,4 @@ SELECT setval(pg_get_serial_sequence('proxies','id'),(SELECT max(id) FROM proxie
 SQL
 
 echo "BASE_AND_DATABASE_READY=1"
-echo "Next: company-activate-egress.sh --env $env_file"
+echo "Next: /usr/local/sbin/company-activate-egress --env $env_file"

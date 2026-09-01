@@ -159,6 +159,7 @@
 - `deploy/company-server.env.example`：只含占位符；真实IP、DNS和域名不得提交GitHub
 
 服务器运维脚本由静态门禁止访问 GitHub；中国服务器只接受经本机/GitHub Actions验证后通过SCP上传的artifact。
+bootstrap会把activate入口安装到 `/usr/local/sbin`，避免首次安装依赖当前工作目录。
 
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
