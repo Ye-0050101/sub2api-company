@@ -104,7 +104,7 @@ company-route-add --spec /root/company-routes/us-a.json --subscription /root/com
 
 工具只复制 spec 指定的 outbound，并拒绝：
 
-- 非 US/SG/JP/KR；
+- 非 US/SG/JP/KR/HK/TW；
 - 非 AnyTLS/Hysteria2/TUIC；
 - hostname 节点地址（节点连接必须使用 literal public IPv4）；
 - insecure / allowInsecure；
@@ -165,7 +165,7 @@ Claude Account 3 → ProxyID 10 → 与 Account 1 共用 US-A
 company-verify-egress --sha256 <CURRENT_BINARY_SHA256> --cn-socks-port <CN_SOCKS_PORT> --cn-exit-ip <CN_FIXED_IPV4>
 ~~~
 
-它会自动发现 /etc/sub2api-egress/routes/*/metadata.json 并逐条检查国际 Route，不需要逐个手写 US/SG/JP/KR 参数。
+它会自动发现 /etc/sub2api-egress/routes/*/metadata.json 并逐条检查国际 Route，不需要逐个手写 US/SG/JP/KR/HK/TW 参数。
 
 验证包含 Company binary SHA、Sub2API/CN/国际服务、每条 Route timer 与 nftables guard、A/B 固定出口与国家、DNS/IPv6/direct deny、本机 listeners 和当前 Sub2API TCP 连接。
 

@@ -150,9 +150,9 @@ func normalizeManagedProxyPolicy(raw config.CompanyManagedProxyConfig) (ManagedP
 	switch policy.Class {
 	case ManagedProxyClassInternational:
 		switch policy.CountryCode {
-		case "US", "SG", "JP", "KR":
+		case "US", "SG", "JP", "KR", "HK", "TW":
 		default:
-			return ManagedProxyPolicy{}, fmt.Errorf("%w: international country must be US, SG, JP, or KR", ErrManagedEgressPolicy)
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: international country must be US, SG, JP, KR, HK, or TW", ErrManagedEgressPolicy)
 		}
 	case ManagedProxyClassCNDirect:
 		if policy.CountryCode != "CN" {
