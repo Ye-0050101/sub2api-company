@@ -128,8 +128,8 @@ install -o root -g root -m 0755 "$binary" /opt/sub2api/sub2api
 install -o root -g root -m 0755 "$singbox" /opt/sub2api-egress/bin/sing-box
 /opt/sub2api-egress/bin/sing-box version >/dev/null
 
-role_count=$(sudo -u postgres psql -X -At -d postgres -v role="$COMPANY_DATABASE_USER"   -c "SELECT count(*) FROM pg_roles WHERE rolname=:'role';")
-database_count=$(sudo -u postgres psql -X -At -d postgres -v db="$COMPANY_DATABASE_NAME"   -c "SELECT count(*) FROM pg_database WHERE datname=:'db';")
+role_count=$(sudo -u postgres psql -X -At -d postgres -c "SELECT count(*) FROM pg_roles WHERE rolname='$COMPANY_DATABASE_USER';")
+database_count=$(sudo -u postgres psql -X -At -d postgres -c "SELECT count(*) FROM pg_database WHERE datname='$COMPANY_DATABASE_NAME';")
 [[ $role_count == 0 && $database_count == 0 ]] || die "database role or database already exists"
 sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d postgres   -v db_password="$COMPANY_DATABASE_PASSWORD" <<SQL
 CREATE ROLE $COMPANY_DATABASE_USER LOGIN PASSWORD :'db_password';

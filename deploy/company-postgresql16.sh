@@ -12,8 +12,9 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl postgresql-common
 
-if pg_lsclusters --no-header 2>/dev/null | grep -q .; then
-  die "an existing PostgreSQL cluster was found; use a fresh VM"
+existing_majors=$(pg_lsclusters --no-header 2>/dev/null | awk '{print $1}' | sort -u | paste -sd, -)
+if [[ -n $existing_majors && $existing_majors != 16 ]]; then
+  die "an unsupported PostgreSQL cluster was found: major=$existing_majors"
 fi
 
 install -d -o root -g root -m 0755 /usr/share/postgresql-common/pgdg
