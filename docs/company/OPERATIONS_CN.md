@@ -17,7 +17,8 @@
 ## 文件职责
 
 - tools/company-update.ps1：Windows 本机同步官方仓库、触发我们 GitHub 的 CI/Security，并下载验证后的 Linux binary。
-- deploy/company-install-fresh.sh：全新 Ubuntu 24.04 amd64 空服务器安装。
+- deploy/company-install-fresh.sh：全新 Ubuntu 22.04 amd64 空服务器安装。
+- deploy/company-postgresql16.sh：通过 PostgreSQL 官方 PGDG 仓库固定安装 PostgreSQL 16。
 - deploy/company-bootstrap-cn.sh：带现有数据库迁移包的安装。
 - deploy/company-activate-egress.sh：创建 CN route、Sub2API UID kill-switch 与 systemd 服务。
 - deploy/company-route.py：解析、验证和渲染指定的 AnyTLS/Hysteria2/TUIC 节点，并控制严格优先级 failover。
@@ -29,7 +30,8 @@
 
 条件：
 
-- Ubuntu 24.04 amd64；
+- Ubuntu 22.04 amd64；
+- PostgreSQL 固定为 16，不使用 Ubuntu 22.04 默认的 PostgreSQL 14；
 - 固定中国公网出口 IPv4；
 - 两个公司批准的 IPv4 DNS 地址（允许是内网 DNS）；
 - 已在本机取得 CI 生成的 Company Linux binary；

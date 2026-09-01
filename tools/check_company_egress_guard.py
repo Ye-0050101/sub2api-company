@@ -42,6 +42,7 @@ SERVER_OPERATION_SCRIPTS = (
     "deploy/company-deploy-egress.sh",
     "deploy/company-verify-egress.sh",
     "deploy/company-install-fresh.sh",
+    "deploy/company-postgresql16.sh",
     "deploy/company-route-apply.sh",
     "deploy/company-route.py",
 )
@@ -81,7 +82,7 @@ REQUIRED_SOURCE = {
         "--confirm-first-install",
         "bundle SHA256 mismatch",
         "binary SHA256 mismatch",
-        "for companion in company-activate-egress.sh company-route.py company-route-apply.sh; do",
+        "for companion in company-activate-egress.sh company-postgresql16.sh company-route.py company-route-apply.sh; do",
         "/usr/local/sbin/company-activate-egress",
         "/usr/local/sbin/company-route-add",
     ),
@@ -97,6 +98,16 @@ REQUIRED_SOURCE = {
         "COMPANY_FRESH_INSTALL_READY=1",
         "Fresh installation failed; removing only resources created by this run",
         "company-route-add",
+        "company-postgresql16.sh",
+        "Ubuntu 22.04 required",
+    ),
+    "deploy/company-postgresql16.sh": (
+        "https://www.postgresql.org/media/keys/ACCC4CF8.asc",
+        "https://apt.postgresql.org/pub/repos/apt",
+        "Suites: jammy-pgdg",
+        "Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc",
+        "postgresql-16 postgresql-client-16 postgresql-contrib-16",
+        "version_num >= 160000 && version_num < 170000",
     ),
     "deploy/company-route.py": (
         'ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR"}',
@@ -117,6 +128,7 @@ REQUIRED_SOURCE = {
         "expected_disaster",
         "sub2api-route-$route_key-failover.timer",
         "probe_managed_route",
+        "PostgreSQL 16 server_version_num",
     ),
     "deploy/company-deploy-egress.sh": (
         "--ops-dir",
@@ -256,6 +268,19 @@ def main() -> int:
             or "git clone" in text
         ):
             failures.append(f"{relative_path}: server operation script must not access GitHub")
+
+    for relative_path in (
+        "deploy/company-install-fresh.sh",
+        "deploy/company-bootstrap-cn.sh",
+    ):
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if "apt-get install" not in line:
+                continue
+            if re.search(r"(?:^|\s)postgresql(?:-contrib)?(?:\s|\\|$)", line):
+                failures.append(
+                    f"{relative_path}:{line_number}: generic PostgreSQL meta-package is forbidden"
+                )
     for relative in PROTECTED_FILES:
         path = ROOT / relative
         if not path.is_file():

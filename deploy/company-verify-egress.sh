@@ -88,6 +88,15 @@ if [[ -n $expected_sha ]]; then
   check "binary SHA256" test "$binary_sha" = "$expected_sha"
 fi
 
+postgres_version_num=$(sudo -u postgres psql -X -Atqc 'SHOW server_version_num' 2>/dev/null || true)
+if [[ $postgres_version_num =~ ^[0-9]+$ ]] &&
+   (( postgres_version_num >= 160000 && postgres_version_num < 170000 )); then
+  echo "PASS PostgreSQL 16 server_version_num=$postgres_version_num"
+else
+  echo "FAIL PostgreSQL 16 server_version_num=${postgres_version_num:-missing}"
+  failures=$((failures + 1))
+fi
+
 if [[ -n $us_socks_port || -n $us_exit_ip ]]; then
   check "US probe arguments complete" test -n "$us_socks_port" -a -n "$us_exit_ip"
   check "US egress service" systemctl is-active --quiet sub2api-egress-us-a.service

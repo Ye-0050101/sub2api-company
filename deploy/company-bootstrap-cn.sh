@@ -34,7 +34,7 @@ require_var() { [[ -n ${!1:-} ]] || die "missing $1 in $env_file"; }
 [[ $binary == /* && -f $binary && -n $binary_sha ]] || die "binary and SHA256 are required"
 [[ $(sha256sum "$bundle" | awk '{print $1}') == "$bundle_sha" ]] || die "bundle SHA256 mismatch"
 [[ $(sha256sum "$binary" | awk '{print $1}') == "$binary_sha" ]] || die "binary SHA256 mismatch"
-for companion in company-activate-egress.sh company-route.py company-route-apply.sh; do
+for companion in company-activate-egress.sh company-postgresql16.sh company-route.py company-route-apply.sh; do
   [[ -f $script_dir/$companion ]] || die "$companion must be next to bootstrap"
 done
 
@@ -66,7 +66,7 @@ for value in sys.argv[1:]:
         raise SystemExit(f"not IPv4: {value}")
 PY
 
-[[ $(. /etc/os-release; echo "$ID:$VERSION_ID") == ubuntu:24.04 ]] || die "Ubuntu 24.04 required"
+[[ $(. /etc/os-release; echo "$ID:$VERSION_ID") == ubuntu:22.04 ]] || die "Ubuntu 22.04 required"
 [[ $(dpkg --print-architecture) == amd64 ]] || die "amd64 required"
 [[ $(systemctl show sub2api.service -p LoadState --value) == not-found ]] || die "target is not fresh"
 [[ ! -e /opt/sub2api && ! -e /etc/sub2api-egress ]] || die "Sub2API paths already exist"
@@ -76,8 +76,8 @@ flock -n 9 || die "another bootstrap is running"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates certbot curl nginx nftables openssl postgresql \
-  postgresql-contrib python3-yaml redis-server tar
+apt-get install -y ca-certificates certbot curl nginx nftables openssl python3-yaml redis-server tar
+"$script_dir/company-postgresql16.sh"
 
 if ! swapon --show=NAME --noheadings | grep -Fxq /swapfile; then
   [[ ! -e /swapfile ]] || die "/swapfile exists but is not active"
@@ -88,7 +88,7 @@ if ! swapon --show=NAME --noheadings | grep -Fxq /swapfile; then
   grep -Eq '^/swapfile[[:space:]]' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
 fi
 
-systemctl enable --now postgresql.service redis-server.service
+systemctl enable --now redis-server.service
 systemctl disable --now nginx.service || true
 
 for user in sub2api sub2api-egress-us-a sub2api-egress-cn; do
@@ -120,6 +120,7 @@ for script in company-deploy-egress company-verify-egress; do
 done
 install -m 0755 "$script_dir/company-activate-egress.sh" /usr/local/sbin/company-activate-egress
 install -m 0755 "$script_dir/company-bootstrap-cn.sh" /usr/local/sbin/company-bootstrap-cn
+install -m 0755 "$script_dir/company-postgresql16.sh" /usr/local/sbin/company-postgresql16
 install -m 0755 "$script_dir/company-route.py" /usr/local/sbin/company-route
 install -m 0755 "$script_dir/company-route-apply.sh" /usr/local/sbin/company-route-add
 

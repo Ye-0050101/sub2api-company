@@ -20,6 +20,7 @@ jobs:
           /bin/bash -n deploy/company-bootstrap-cn.sh
           /bin/bash -n deploy/company-activate-egress.sh
           /bin/bash -n deploy/company-install-fresh.sh
+          /bin/bash -n deploy/company-postgresql16.sh
           /bin/bash -n deploy/company-route-apply.sh
           python3 deploy/tests/company-route-test.py
           python3 -m json.tool deploy/company-route.example.json >/dev/null

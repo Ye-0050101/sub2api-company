@@ -34,7 +34,7 @@ require_var() { [[ -n ${!1:-} ]] || die "missing $1 in $env_file"; }
 "$binary" -version 2>&1 | grep -Fq "company-" || die "binary is not a Company build"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-for required in company-activate-egress.sh company-deploy-egress.sh   company-verify-egress.sh company-route.py company-route-apply.sh
+for required in company-activate-egress.sh company-deploy-egress.sh company-postgresql16.sh company-verify-egress.sh company-route.py company-route-apply.sh
 do
   [[ -f $script_dir/$required ]] || die "$required must be next to installer"
 done
@@ -74,7 +74,7 @@ for value in sys.argv[2:]:
         raise SystemExit(f"not a canonical DNS IPv4: {value}")
 PY
 
-[[ $(. /etc/os-release; echo "$ID:$VERSION_ID") == ubuntu:24.04 ]] || die "Ubuntu 24.04 required"
+[[ $(. /etc/os-release; echo "$ID:$VERSION_ID") == ubuntu:22.04 ]] || die "Ubuntu 22.04 required"
 [[ $(dpkg --print-architecture) == amd64 ]] || die "amd64 required"
 [[ $(systemctl show sub2api.service -p LoadState --value) == not-found ]] ||
   die "Sub2API service already exists"
@@ -113,8 +113,9 @@ trap rollback_fresh_install ERR INT TERM
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates certbot curl nginx nftables openssl postgresql   postgresql-contrib python3 python3-yaml redis-server
-systemctl enable --now postgresql.service redis-server.service
+apt-get install -y ca-certificates certbot curl nginx nftables openssl python3 python3-yaml redis-server
+"$script_dir/company-postgresql16.sh"
+systemctl enable --now redis-server.service
 systemctl disable --now nginx.service || true
 
 for user in sub2api sub2api-egress-cn; do
@@ -200,6 +201,7 @@ install -o root -g root -m 0755 "$script_dir/company-verify-egress.sh"   /usr/lo
 install -o root -g root -m 0755 "$script_dir/company-route.py"   /usr/local/sbin/company-route
 install -o root -g root -m 0755 "$script_dir/company-route-apply.sh"   /usr/local/sbin/company-route-add
 install -o root -g root -m 0755 "$script_dir/company-install-fresh.sh"   /usr/local/sbin/company-install-fresh
+install -o root -g root -m 0755 "$script_dir/company-postgresql16.sh"   /usr/local/sbin/company-postgresql16
 
 /usr/local/sbin/company-activate-egress --env "$env_file"
 
