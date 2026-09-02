@@ -80,7 +80,7 @@ def load_json(path: Path, label: str, *, root_secret: bool = False) -> dict:
     return value
 
 
-def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, int]:
+def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, list[int]]:
     if not isinstance(raw, dict):
         raise RouteError(f"{label} must be an object")
     outbound = copy.deepcopy(raw)
@@ -88,9 +88,27 @@ def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, int]:
     if protocol not in ALLOWED_PROTOCOLS:
         raise RouteError(f"{label}.type must be anytls, hysteria2, or tuic")
     node_ip = public_ipv4(outbound.get("server"), f"{label}.server")
-    node_port = port(outbound.get("server_port"), f"{label}.server_port")
-    if "server_ports" in outbound:
-        raise RouteError(f"{label}.server_ports/port hopping is prohibited")
+    raw_server_ports = outbound.get("server_ports")
+    if raw_server_ports is not None:
+        if protocol != "hysteria2":
+            raise RouteError(f"{label}.server_ports is allowed only for hysteria2")
+        if outbound.get("server_port") not in (None, "", 0):
+            raise RouteError(f"{label} must not combine server_port and server_ports")
+        if not isinstance(raw_server_ports, list) or not 1 <= len(raw_server_ports) <= 3:
+            raise RouteError(f"{label}.server_ports must contain 1 to 3 exact ports")
+        node_ports = []
+        for index, raw_port in enumerate(raw_server_ports):
+            text_port = str(raw_port).strip()
+            if ":" in text_port or "-" in text_port:
+                raise RouteError(f"{label}.server_ports[{index}] must be one exact port")
+            checked = port(raw_port, f"{label}.server_ports[{index}]")
+            if checked in node_ports:
+                raise RouteError(f"{label}.server_ports contains a duplicate port")
+            node_ports.append(checked)
+        outbound["server_ports"] = [str(value) for value in node_ports]
+        outbound.pop("server_port", None)
+    else:
+        node_ports = [port(outbound.get("server_port"), f"{label}.server_port")]
     if str(outbound.get("detour") or "").strip() or "domain_resolver" in outbound:
         raise RouteError(f"{label} must not use detour or a DNS resolver")
     tls = outbound.get("tls")
@@ -108,7 +126,7 @@ def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, int]:
         not str(outbound.get("uuid") or "") or not str(outbound.get("password") or "")
     ):
         raise RouteError(f"{label}.uuid and password are required")
-    return outbound, ALLOWED_PROTOCOLS[protocol], node_ip, node_port
+    return outbound, ALLOWED_PROTOCOLS[protocol], node_ip, node_ports
 
 
 def normalize(spec: dict, subscription: dict) -> dict:
@@ -173,7 +191,7 @@ def normalize(spec: dict, subscription: dict) -> dict:
         if not 1 <= priority <= 1000 or priority in priorities:
             raise RouteError("candidate priorities must be unique integers from 1 to 1000")
         priorities.add(priority)
-        outbound, network, node_ip, node_port = validate_outbound(
+        outbound, network, node_ip, node_ports = validate_outbound(
             by_tag[source_tag], f"subscription outbound {source_tag!r}"
         )
         tag = f"company-{route_key}-{index + 1}"
@@ -188,7 +206,8 @@ def normalize(spec: dict, subscription: dict) -> dict:
                 "expected_exit_ipv4": primary_ip if role == "primary" else disaster_ip,
                 "network": network,
                 "node_ipv4": node_ip,
-                "node_port": node_port,
+                "node_port": node_ports[0],
+                "node_ports": node_ports,
                 "outbound": outbound,
             }
         )
@@ -220,7 +239,7 @@ def metadata(route: dict) -> dict:
     )
     candidate_keys = (
         "tag", "source_tag", "role", "priority", "probe_port",
-        "expected_exit_ipv4", "network", "node_ipv4", "node_port",
+        "expected_exit_ipv4", "network", "node_ipv4", "node_port", "node_ports",
     )
     return {key: route[key] for key in keys} | {
         "candidates": [
@@ -398,9 +417,14 @@ def guard(route: dict, uid: int) -> str:
         f'  meta skuid {uid} oifname "lo" counter accept',
     ]
     for item in route["candidates"]:
+        node_ports = item.get("node_ports") or [item["node_port"]]
+        if len(node_ports) == 1:
+            port_clause = str(node_ports[0])
+        else:
+            port_clause = "{ " + ", ".join(str(value) for value in node_ports) + " }"
         lines.append(
             f"  meta skuid {uid} ip daddr {item['node_ipv4']} "
-            f"{item['network']} dport {item['node_port']} counter accept"
+            f"{item['network']} dport {port_clause} counter accept"
         )
     lines.extend([f"  meta skuid {uid} counter reject", " }", "}", ""])
     return "\n".join(lines)

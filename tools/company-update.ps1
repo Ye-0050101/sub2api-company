@@ -110,6 +110,7 @@ $requiredOps = @(
     'company-verify-egress',
     'company-route',
     'company-route-add'
+    'companyctl'
 )
 if (-not (Test-Path -LiteralPath $opsManifestPath -PathType Leaf)) {
     throw 'Company operations SHA256SUMS is missing.'
