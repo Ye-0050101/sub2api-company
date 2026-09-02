@@ -574,7 +574,7 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	}
 	if s.managedProxyResolver != nil && !s.managedProxyResolver.DevelopmentBypass() {
 		if _, err := s.managedProxyResolver.ResolveForAccount(ctx, account.ID); err != nil {
-			return nil, newUpstreamModelSyncUnsupportedError("Company egress rejected this account", err)
+			return nil, nil, newUpstreamModelSyncUnsupportedError("Company egress rejected this account", err)
 		}
 	}
 
