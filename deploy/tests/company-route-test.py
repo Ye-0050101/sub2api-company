@@ -131,6 +131,25 @@ class CompanyRouteTest(unittest.TestCase):
         with self.assertRaisesRegex(company_route.RouteError, "canonical public IPv4"):
             company_route.normalize(route_spec(), hostname)
 
+    def test_hysteria2_allows_at_most_three_exact_ports(self):
+        selected = subscription()
+        hy2 = selected["outbounds"][1]
+        hy2.pop("server_port")
+        hy2["server_ports"] = ["8443", "8444", "8445"]
+        route = company_route.normalize(route_spec(), selected)
+        candidate = route["candidates"][1]
+        self.assertEqual(candidate["node_ports"], [8443, 8444, 8445])
+        guard = company_route.guard(route, 999)
+        self.assertIn("udp dport { 8443, 8444, 8445 }", guard)
+
+        for invalid in (["8443:8500"], ["8443", "8444", "8445", "8446"]):
+            bad = subscription()
+            bad_hy2 = bad["outbounds"][1]
+            bad_hy2.pop("server_port")
+            bad_hy2["server_ports"] = invalid
+            with self.assertRaises(company_route.RouteError):
+                company_route.normalize(route_spec(), bad)
+
     def test_rejects_missing_disaster_candidate_and_unknown_country(self):
         no_disaster = route_spec()
         no_disaster["candidates"] = no_disaster["candidates"][:2]

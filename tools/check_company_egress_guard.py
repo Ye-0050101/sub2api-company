@@ -43,6 +43,7 @@ SERVER_OPERATION_SCRIPTS = (
     "deploy/company-verify-egress.sh",
     "deploy/company-install-fresh.sh",
     "deploy/company-postgresql16.sh",
+    "deploy/companyctl.py",
     "deploy/company-route-apply.sh",
     "deploy/company-route.py",
 )
@@ -82,8 +83,9 @@ REQUIRED_SOURCE = {
         "--confirm-first-install",
         "bundle SHA256 mismatch",
         "binary SHA256 mismatch",
-        "for companion in company-activate-egress.sh company-postgresql16.sh company-route.py company-route-apply.sh; do",
+        "for companion in company-activate-egress.sh company-postgresql16.sh companyctl.py company-route.py company-route-apply.sh; do",
         "/usr/local/sbin/company-activate-egress",
+        "/usr/local/sbin/companyctl",
         "/usr/local/sbin/company-route-add",
     ),
     "deploy/company-activate-egress.sh": (
@@ -100,6 +102,7 @@ REQUIRED_SOURCE = {
         "company-route-add",
         "company-postgresql16.sh",
         "Ubuntu 22.04 required",
+        "companyctl.py",
     ),
     "deploy/company-postgresql16.sh": (
         "https://www.postgresql.org/media/keys/ACCC4CF8.asc",
@@ -113,8 +116,16 @@ REQUIRED_SOURCE = {
         'ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR", "HK", "TW"}',
         '"default": "block"',
         "disaster_exit_ipv4",
-        "server_ports/port hopping is prohibited",
+        "server_ports must contain 1 to 3 exact ports",
         "must not enable insecure TLS",
+    ),
+    "deploy/companyctl.py": (
+        'COUNTRIES = ("US", "SG", "JP", "KR", "HK", "TW")',
+        "certificate_public_key_sha256",
+        "HY2 requires 1 to 3 unique exact ports",
+        "getpass.getpass",
+        "route activation failed and was rolled back",
+        "account audit failed",
     ),
     "deploy/company-route-apply.sh": (
         "route core policy is immutable",
@@ -133,7 +144,7 @@ REQUIRED_SOURCE = {
     "deploy/company-deploy-egress.sh": (
         "--ops-dir",
         "operations manifest SHA256 mismatch",
-        "required_ops=(company-deploy-egress company-verify-egress company-route company-route-add)",
+        "required_ops=(company-deploy-egress company-verify-egress company-route company-route-add companyctl)",
         "restoring previous binary and operations tools",
     ),
     "tools/company-update.ps1": (

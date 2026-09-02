@@ -23,6 +23,7 @@
 - deploy/company-activate-egress.sh：创建 CN route、Sub2API UID kill-switch 与 systemd 服务。
 - deploy/company-route.py：解析、验证和渲染指定的 AnyTLS/Hysteria2/TUIC 节点，并控制严格优先级 failover。
 - deploy/company-route-apply.sh（服务器命令名 company-route-add）：原子创建国际 Route、ProxyID、guard、timer 和 Company policy。
+- deploy/companyctl.py（服务器命令名 companyctl）：交互式导入三协议节点、生成证书公钥pin、限制HY2明确端口并包装验证/审计/部署。
 - deploy/company-deploy-egress.sh：后续 binary 原子更新，健康失败自动恢复上一 binary。
 - deploy/company-verify-egress.sh：只读检查 binary、服务、CN route、所有国际 Route、DNS/IPv6/direct kill-switch。
 
@@ -70,7 +71,48 @@ COMPANY_ENABLE_PUBLIC_TLS=0
 
 此时只允许添加中国 AI 账号；国际 Route 尚未创建。
 
-## 增加国际 Route
+## 推荐：交互式增加国际 Route
+
+管理员只需准备代理软件复制出的 AnyTLS、Hysteria2、TUIC 原始链接，不需要订阅URL。执行：
+
+~~~bash
+sudo companyctl route add
+~~~
+
+向导会隐藏输入链接，并依次询问国家、Route Key、ProxyID、本机端口、主/灾备出口IPv4和三协议链接。它会：
+
+- 支持 US/SG/JP/KR/HK/TW；
+- AnyTLS通过TCP握手生成固定证书公钥pin；
+- HY2读取链接中的pinSHA256；
+- TUIC优先使用显式pin，否则尝试同节点HY2 pin，证书不同则该候选失败关闭；
+- 将 insecure 统一改为 false；
+- HY2最多保留3个明确UDP端口（含基础端口），禁止范围白名单；
+- 生成精确节点IPv4/端口 nftables；
+- 写入ProxyID和Company policy；
+- 验证出口IP/国家，失败自动回滚；
+- 安全擦除导入阶段临时凭据文件。
+
+查看Route：
+
+~~~bash
+sudo companyctl route list
+~~~
+
+验证全部出口：
+
+~~~bash
+sudo companyctl verify
+~~~
+
+账号添加完成后审计ProxyID国家绑定：
+
+~~~bash
+sudo companyctl account audit
+~~~
+
+OAuth仍在网页完成；向导只负责先建立安全Route和后续账号绑定审计。
+
+## 兼容入口：通过JSON增加国际 Route
 
 服务器不得自行拉取订阅。推荐在管理员本机下载订阅的 sing-box JSON，再通过 SCP 上传到服务器：
 
@@ -109,6 +151,7 @@ company-route-add --spec /root/company-routes/us-a.json --subscription /root/com
 - hostname 节点地址（节点连接必须使用 literal public IPv4）；
 - insecure / allowInsecure；
 - port hopping；
+- HY2允许1到3个明确端口，但拒绝端口范围和超过3个端口；
 - detour；
 - 节点 DNS resolver；
 - 重复 ProxyID、route_key 或本机端口；
@@ -159,6 +202,8 @@ Claude Account 3 → ProxyID 10 → 与 Account 1 共用 US-A
 
 不要在网页修改 Company Proxy 的协议、主机、端口、用户名、密码、状态、有效期、备用代理或 fallback；Company repository 会拒绝受管 Proxy 的普通修改/删除。
 
+账号添加后执行 `sudo companyctl account audit`，任何国际账号无代理、国家Route错误或中国账号未绑定CN Route都会返回FAIL。
+
 ## 日常验证
 
 ~~~bash
@@ -201,6 +246,12 @@ company-verify-egress --sha256 <SHA256> --cn-socks-port <CN_SOCKS_PORT> --cn-exi
 ~~~
 
 company-deploy-egress 同时验证 binary、ops 精确文件集和各自 SHA256，保存上一 binary/ops 后原子替换并等待本机 /health；任一环节失败会恢复上一套。
+
+也可以使用统一入口透传同样参数：
+
+~~~bash
+sudo companyctl deploy --binary /root/sub2api-linux-amd64 --sha256 <SHA256> --ops-dir /root/company-ops --ops-sha256 <OPS_MANIFEST_SHA256> --db-backup-confirmed
+~~~
 
 数据库 migration 是 forward-only。若新版本已经修改数据库结构，binary 自动回滚不能逆转数据库，必须使用更新前验证过的数据库 dump 回滚。
 

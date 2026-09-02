@@ -34,7 +34,7 @@ require_var() { [[ -n ${!1:-} ]] || die "missing $1 in $env_file"; }
 [[ $binary == /* && -f $binary && -n $binary_sha ]] || die "binary and SHA256 are required"
 [[ $(sha256sum "$bundle" | awk '{print $1}') == "$bundle_sha" ]] || die "bundle SHA256 mismatch"
 [[ $(sha256sum "$binary" | awk '{print $1}') == "$binary_sha" ]] || die "binary SHA256 mismatch"
-for companion in company-activate-egress.sh company-postgresql16.sh company-route.py company-route-apply.sh; do
+for companion in company-activate-egress.sh company-postgresql16.sh companyctl.py company-route.py company-route-apply.sh; do
   [[ -f $script_dir/$companion ]] || die "$companion must be next to bootstrap"
 done
 
@@ -121,6 +121,7 @@ done
 install -m 0755 "$script_dir/company-activate-egress.sh" /usr/local/sbin/company-activate-egress
 install -m 0755 "$script_dir/company-bootstrap-cn.sh" /usr/local/sbin/company-bootstrap-cn
 install -m 0755 "$script_dir/company-postgresql16.sh" /usr/local/sbin/company-postgresql16
+install -m 0755 "$script_dir/companyctl.py" /usr/local/sbin/companyctl
 install -m 0755 "$script_dir/company-route.py" /usr/local/sbin/company-route
 install -m 0755 "$script_dir/company-route-apply.sh" /usr/local/sbin/company-route-add
 

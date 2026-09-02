@@ -23,6 +23,7 @@ jobs:
           /bin/bash -n deploy/company-postgresql16.sh
           /bin/bash -n deploy/company-route-apply.sh
           python3 deploy/tests/company-route-test.py
+          python3 deploy/tests/companyctl-test.py
           python3 -m json.tool deploy/company-route.example.json >/dev/null
           python3 -m json.tool deploy/company-subscription.selected.example.json >/dev/null
           /bin/bash -n deploy/apple-container.sh
@@ -119,7 +120,7 @@ jobs:
           working-directory: backend
 
   company-binary:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/company/egress-v1' || startsWith(github.ref, 'refs/heads/company/upgrade-'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/company/egress-v1' || github.ref == 'refs/heads/company/egress-v1-ubuntu22.04' || startsWith(github.ref, 'refs/heads/company/upgrade-'))
     needs: [shell, test, frontend, golangci-lint]
     runs-on: ubuntu-latest
     steps:
@@ -149,9 +150,10 @@ jobs:
           install -m 0755 ../deploy/company-verify-egress.sh ../dist/company-ops/company-verify-egress
           install -m 0755 ../deploy/company-route.py ../dist/company-ops/company-route
           install -m 0755 ../deploy/company-route-apply.sh ../dist/company-ops/company-route-add
+          install -m 0755 ../deploy/companyctl.py ../dist/company-ops/companyctl
           (
             cd ../dist/company-ops
-            sha256sum company-deploy-egress company-verify-egress company-route company-route-add > SHA256SUMS
+            sha256sum company-deploy-egress company-verify-egress company-route company-route-add companyctl > SHA256SUMS
           )
       - name: Upload verified company website binary
         uses: actions/upload-artifact@v7
