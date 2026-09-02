@@ -140,7 +140,9 @@ chmod 0640 "$route_dir/guard.nft"
 /opt/sub2api-egress/bin/sing-box check -c "$route_dir/config.json"
 nft -c -f "$route_dir/guard.nft"
 
-install -o root -g root -m 0755 "$route_tool" /usr/local/sbin/company-route
+if [[ $(readlink -f "$route_tool") != /usr/local/sbin/company-route ]]; then
+  install -o root -g root -m 0755 "$route_tool" /usr/local/sbin/company-route
+fi
 
 cat >/etc/sub2api-egress/route-control-guard.nft <<NFT
 table inet sub2api_route_control_guard {

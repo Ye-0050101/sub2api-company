@@ -121,6 +121,7 @@ REQUIRED_SOURCE = {
         "sub2api_route_control_guard",
         "allow_direct_on_error",
         "Route activation failed; restoring the previous application state",
+        'readlink -f "$route_tool"',
         'die() { echo "REFUSING: $*" >&2; return 1; }',
     ),
     "deploy/company-verify-egress.sh": (
