@@ -2,9 +2,11 @@
 set -Eeuo pipefail
 
 env_file=""
+reconcile_config_only=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env) env_file=$2; shift ;;
+    --reconcile-config-only) reconcile_config_only=1 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -30,7 +32,87 @@ done
 stage=/var/lib/sub2api-company-bootstrap
 singbox=/opt/sub2api-egress/bin/sing-box
 [[ -x /opt/sub2api/sub2api && -x $singbox && -f /opt/sub2api/config.yaml ]] || die "bootstrap base is incomplete"
+
+reconcile_proxy_probe() {
+  python3 - /opt/sub2api/config.yaml <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+import yaml
+
+path = Path(sys.argv[1])
+info = path.stat()
+cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+security = cfg.setdefault("security", {})
+security.setdefault("proxy_fallback", {})["allow_direct_on_error"] = False
+security["proxy_probe"] = {
+    "insecure_skip_verify": False,
+    "urls": [
+        {"url": "https://api.ipify.org?format=json", "parser": "ipify"},
+        {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
+    ],
+}
+temporary = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.company.",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        yaml.safe_dump(cfg, handle, allow_unicode=True, sort_keys=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chown(temporary, info.st_uid, info.st_gid)
+    os.chmod(temporary, stat.S_IMODE(info.st_mode))
+    os.replace(temporary, path)
+    temporary = None
+finally:
+    if temporary is not None:
+        temporary.unlink(missing_ok=True)
+PY
+}
+
+if [[ $reconcile_config_only -eq 1 ]]; then
+  exec 9>/run/lock/sub2api-company-deploy.lock
+  flock -n 9 || die "another Company deployment is running"
+  exec 8>/run/lock/sub2api-company-route.lock
+  flock -n 8 || die "a Company route operation is running"
+  config_backup=$(mktemp /opt/sub2api/.config.yaml.reconcile.XXXXXX)
+  cp -a /opt/sub2api/config.yaml "$config_backup"
+  restore_reconciled_config() {
+    trap - ERR INT TERM
+    cp -a "$config_backup" /opt/sub2api/config.yaml
+    rm -f -- "$config_backup"
+    if [[ $(systemctl show sub2api.service -p LoadState --value) == loaded ]]; then
+      systemctl restart sub2api.service || true
+    fi
+  }
+  trap restore_reconciled_config ERR INT TERM
+  reconcile_proxy_probe
+  if [[ $(systemctl show sub2api.service -p LoadState --value) == loaded ]]; then
+    systemctl restart sub2api.service
+    healthy=0
+    for _ in $(seq 1 60); do
+      if curl --noproxy '*' -fsS --max-time 2 http://127.0.0.1:8080/health >/dev/null; then
+        healthy=1
+        break
+      fi
+      sleep 1
+    done
+    [[ $healthy -eq 1 ]] || die "application health failed after proxy probe reconciliation"
+  fi
+  trap - ERR INT TERM
+  rm -f -- "$config_backup"
+  echo "COMPANY_PROXY_PROBE_RECONCILED=1"
+  exit 0
+fi
 [[ $(systemctl show sub2api.service -p LoadState --value) == not-found ]] || die "Sub2API is already activated"
+reconcile_proxy_probe
 
 migration_us=0
 if [[ -f $stage/systemd/sub2api-egress-us-a.service ]]; then

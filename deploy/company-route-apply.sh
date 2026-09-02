@@ -392,7 +392,7 @@ for _ in $(seq 1 30); do
 done
 [[ $healthy -eq 1 ]] || die "Sub2API did not become healthy"
 app_stopped=0
-pp_config_changed=0
+app_config_changed=0
 
 trap - ERR INT TERM
 cleanup_stage

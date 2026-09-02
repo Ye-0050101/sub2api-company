@@ -2,7 +2,7 @@
 
 > 适用范围：Company Egress V1。本文以仓库现有脚本和代码为准，不把规划中的能力写成已经实现。
 >
-> 当前仓库有两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。
+> 当前实现已跟进官方 Sub2API v0.2.0，并维护两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以 `dist/company/latest.json` 记录的提交和制品为准，不以本文中的示例值判断。
 
 ## 1. 目标、范围与不变量
 
@@ -132,6 +132,8 @@ curl -4 --connect-timeout 8 --max-time 20 https://api-ipv4.ip.sb/ip
 - 服务器准确 Ubuntu 版本；
 - binary、sing-box 和 ops 的 SHA256。
 
+Ubuntu 22.04 与 24.04 的 fresh installer 都会写入相同的 Company 安全不变量，包括 `allow_direct_on_error=false` 和两个精确 HTTPS Proxy 测试端点；两者的主要差异是 PostgreSQL 安装方式。
+
 ### 5.2 Windows 获取正确分支
 
 CMD：
@@ -247,6 +249,16 @@ COMPANY_FRESH_INSTALL_READY=1
 
 脚本会创建数据库和管理员、CN Proxy、CN listener、Sub2API UID kill-switch、systemd 服务并做一次验证。失败时只清理本轮创建的应用资源；不要在失败后手工删除未知目录，先阅读 `journalctl` 和脚本错误。
 
+fresh installer 会固定普通 Proxy 网页测试为以下精确配置，避免官方 HTTP 探针与仅允许 HTTPS 的 CN guard 冲突：
+
+~~~text
+https://api.ipify.org?format=json       parser=ipify
+https://cloudflare.com/cdn-cgi/trace    parser=chatgpt-trace
+insecure_skip_verify=false
+~~~
+
+后端 Proxy probe client 禁止跟随 HTTP 重定向；任一 3xx 都作为该探针失败处理，不能从批准 URL 跳转到其他主机。
+
 ### 5.6 安装后最小验收
 
 ~~~bash
@@ -294,6 +306,8 @@ http://127.0.0.1:18080
 当前脚本的 `COMPANY_ENABLE_PUBLIC_TLS=1` 使用 Certbot/Let’s Encrypt，适用于可从公网完成 ACME 验证且已有备案/批准域名的环境，不等同于内网 CA 自动配置。只有私有 IP 时不要直接开启该选项。
 
 禁止：把 Sub2API 改成监听 `0.0.0.0:8080`、向整个局域网开放 8080、使用未受控的公网反向隧道。
+
+Nginx 只解决“已能到达公司内网的设备如何以 HTTPS 进入网站”，不会把私有 IP 变成公网可达地址。外出、手机热点或家庭网络访问必须使用公司批准的 VPN、零信任访问网关或堡垒机；VPN/网关应由公司 IT 管理身份、MFA、设备策略和内网路由。不要在这台虚拟机上自行做公网端口映射来替代公司 VPN，也不要把 AI egress 的 sing-box listener 当作入站 VPN。
 
 ## 7. CN_DIRECT
 
@@ -509,41 +523,44 @@ git status --short
 
 禁止向 upstream push。
 
-### 11.2 Ubuntu 24.04 主 Company 分支更新
+### 11.2 一条命令更新官方源码与两个 Company 分支
 
-在干净的 Windows 工作树执行：
+先确认干净工作树位于 `company/egress-v1`（不在时先执行 `git switch company/egress-v1`）。正式更新只有一个 PowerShell 脚本命令；`<OFFICIAL_TAG_OR_COMMIT>` 必须替换为已审阅的官方 tag 或 commit：
 
 ~~~powershell
-git switch company/egress-v1
 .\tools\company-update.ps1 -UpstreamRef <OFFICIAL_TAG_OR_COMMIT>
 ~~~
 
-当前脚本会：
+这就是工作站侧完整的官方更新命令。脚本会：
 
 1. fetch upstream 并验证目标继承冻结基线；
-2. 建临时 `company/upgrade-*` 分支合并官方提交；
-3. 运行 `tools/check_company_egress_guard.py`；
-4. 推送临时分支到公司 GitHub；
-5. 等待 CI 和 Security Scan；
-6. 下载 Linux binary 和精确 `company-ops` artifact；
-7. 验证每个 ops 文件与 manifest；
-8. fast-forward `main` 和 `company/egress-v1` 并原子 push；
-9. 输出 `dist/company/latest.json`；
-10. 不操作服务器，不 force push。
+2. 从 `company/egress-v1` 建第一条临时 `company/upgrade-*` 分支并合并官方提交；
+3. 扫描完整 production Go tree，运行 Company 静态门；
+4. 推送第一条临时分支并等待 Company CI 与 Security Scan 全绿；
+5. 下载该提交的 Linux amd64 binary 与精确 `company-ops` artifact，验证 manifest 和每个文件 SHA256；
+6. 从 `company/egress-v1-ubuntu22.04` 建第二条临时 `company/upgrade-ubuntu22-*` 分支，合并已验证的 Company 临时分支；
+7. 再次运行静态门，推送第二条临时分支并等待 Ubuntu 22.04 CI 与 Security Scan 全绿；
+8. 只有两套 CI/Security 全部成功后，才以一次 atomic push 同时推进 `main`、`company/egress-v1`、`company/egress-v1-ubuntu22.04`；
+9. 发布成功后删除两条临时分支；失败时保留可审计临时分支，不 force push、不自动 reset 正式分支；
+10. 输出 `dist/company/latest.json`，不操作任何服务器。
 
 它使用当前 Git credential manager 中已有的 GitHub 凭据，不要求把 PAT 写进参数或文件。
 
-### 11.3 Ubuntu 22.04 兼容分支的真实限制
+### 11.3 `dist/company/latest.json`
 
-`tools/company-update.ps1` 当前硬编码要求位于 `company/egress-v1`，并不会自动更新 `company/egress-v1-ubuntu22.04`。因此 Ubuntu 22.04 的 upstream 跟进目前不是完全一键：
+更新成功后必须保留并审阅：
 
-1. 先按上一节更新并验证 `company/egress-v1`；
-2. 将已验证 Company 变化合并到 `company/egress-v1-ubuntu22.04`；
-3. 保留 22.04/PGDG PostgreSQL 16 专属差异；
-4. 再运行静态门和该分支 CI；
-5. 只部署该分支生成且验证通过的 artifact。
+~~~text
+dist/company/latest.json
+~~~
 
-在为 22.04 编写并验证专用自动更新包装器之前，不要声称它已实现单命令 upstream 升级。
+它记录：upstream commit、Company commit、Ubuntu 22.04 commit、两套分支各自的 binary 路径/SHA256、ops 路径/manifest SHA256，以及两套 CI/Security URL。Ubuntu 24.04 使用 Company artifact，Ubuntu 22.04 使用 `ubuntu22_*` artifact；服务器上传与部署参数必须来自该文件和对应 OS artifact，不要凭聊天记录、旧文件名或手工猜测 SHA。
+
+### 11.4 完整 production Go 网络静态门
+
+`tools/check_company_egress_guard.py` 扫描整个 `backend` production Go 源码树，而不是只扫描历史上挑选出的少量文件。测试代码、生成的 Ent/protobuf 源码和明确测试辅助目录被排除，production `wire_gen.go` 仍在范围内。
+
+静态门冻结并审计 `http.DefaultClient`、HTTP convenience methods、裸 `http.Client{}`、直接 `net.Dialer`/`net.Dial*`、`tls.Dial*`、默认/自定义 resolver、直接 DNS lookup、裸 proxy URL parser 和空 ProxyURL client 等网络原语，并先把 `net/http`、`net`、`crypto/tls`、`net/url` 的 import alias 归一化。现有例外必须按“精确文件 + 规则 + 出现次数 + 审计原因”进入 allowlist；新增文件、出现次数变化或旧例外消失都会令更新停止。allowlist 不是免审通配符，任何改动都要重新证明不能承载受管账号流量。该门属于“完整目录的已知语法原语冻结”，不是 Go 数据流证明；通过变量间接传递的调用仍需代码审查，最终公网边界仍由 Sub2API UID nftables 保证。
 
 ## 12. 服务器更新与快速回滚
 
@@ -551,33 +568,39 @@ git switch company/egress-v1
 
 1. `sudo companyctl verify` 必须通过；
 2. 停止写入或进入维护窗口；
-3. 创建 PostgreSQL custom dump；
-4. `pg_restore --list` 验证 dump；
-5. 上传 binary、`company-ops` 和 SHA256；
-6. 不从服务器访问 GitHub。
+3. 检查 `dist/company/latest.json` 和即将上传的 artifact/SHA256 对应；
+4. 上传 binary、`company-ops` 和 SHA256；
+5. 不从服务器访问 GitHub。
 
-备份示例：
+部署脚本会在取得部署锁和 Route 锁之后，自动从 `/opt/sub2api/config.yaml` 读取安全的数据库名，创建 PostgreSQL custom dump，并通过 `pg_restore --list` 验证。备份保存在：
+
+~~~text
+/var/backups/sub2api/<DB>-predeploy-<UTC_TIMESTAMP>.dump
+~~~
+
+备份或验证失败会在替换 binary/config/ops 前停止。`--db-backup-confirmed` 仅为旧命令兼容参数，即使提供它也必须重新创建本次经过验证的备份。
+脚本还要求备份文件系统至少保留“数据库当前大小的 2 倍 + 64 MiB”可用空间。它不会自动删除旧 dump，避免误删唯一恢复点；运维人员应按公司保留策略定期列出并离线归档旧备份：
 
 ~~~bash
-timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-backup=/var/backups/sub2api/<DB>-$timestamp.dump
-sudo install -d -o root -g root -m 0700 /var/backups/sub2api
-sudo -u postgres pg_dump --format=custom --no-owner --no-acl <DB> >"$backup"
-test -s "$backup"
-pg_restore --list "$backup" >/dev/null
-chmod 0600 "$backup"
-sha256sum "$backup"
+sudo find /var/backups/sub2api -maxdepth 1 -type f \
+  -name '*-predeploy-*.dump' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
 ~~~
+
+删除必须针对人工核验过的精确文件路径执行，且至少保留最近一个已通过 `pg_restore --list` 的部署前备份。
 
 ### 12.2 原子部署
 
+始终直接执行本次上传 artifact 中的部署脚本，避免服务器上旧版
+`companyctl`/`company-deploy-egress` 跳过新增加的备份或安全门。脚本验证通过后会把同一
+artifact 内的新版 ops 原子安装到 `/usr/local/sbin`；后续也可使用 `companyctl deploy`，
+但直接执行 artifact 脚本最不容易产生版本歧义。
+
 ~~~bash
-sudo companyctl deploy \
+sudo /root/release/company-ops/company-deploy-egress \
   --binary /root/release/sub2api-linux-amd64 \
   --sha256 <BINARY_SHA256> \
   --ops-dir /root/release/company-ops \
-  --ops-sha256 <OPS_MANIFEST_SHA256> \
-  --db-backup-confirmed
+  --ops-sha256 <OPS_MANIFEST_SHA256>
 ~~~
 
 部署脚本会验证：
@@ -587,13 +610,38 @@ sudo companyctl deploy \
 - manifest、各文件 hash、Shell/Python 语法；
 - ops 不包含 GitHub 下载逻辑；
 - Sub2API systemd 身份、工作目录和 nftables guard；
+- 新建并验证本次 PostgreSQL custom dump；
+- `config.yaml` 的 direct fallback=false 和精确 HTTPS Proxy 探针；
 - 替换后本机 `/health`。
 
-旧 binary/ops 会保存到 `/opt/sub2api/releases/rollback-<timestamp>`。启动或健康检查失败时脚本自动恢复上一 binary/ops 并重启。
+旧 binary/config/ops 会保存到 `/opt/sub2api/releases/rollback-<timestamp>`。新 binary 启动前发生失败时，脚本恢复上一 binary/config/ops 并重启旧版；一旦新 binary 已经开始启动，它可能已执行 forward-only migration，此后的启动、健康或 ops 安装失败会恢复文件但保持 `sub2api.service` 停止，等待操作者恢复数据库 dump 或明确确认旧 binary 与新 schema 兼容。脚本不会冒险自动启动旧版。
 
 ### 12.3 数据库回滚边界
 
-binary 自动回滚不能逆转数据库 migration。数据库变更是 forward-only；如果新版本已经改变 schema，完整回滚必须恢复更新前验证过的数据库 dump，并与对应旧 binary/ops 配套。不得只换回旧 binary 后继续运行未知 schema。
+binary/config/ops 自动回滚不能逆转数据库 migration。数据库变更是 forward-only；脚本只保留并报告经过验证的 dump 路径，绝不会自动恢复数据库。自动恢复可能覆盖升级启动后的新写入，因此完整数据库回滚必须在维护窗口由操作者明确停止应用、恢复该 dump，并与对应旧 binary/config/ops 配套。不得只换回旧 binary 后继续运行未知 schema。
+
+官方 v0.2.0 包含 231～233 系列 schema 变化：`usage_logs` 新字段、用户公开组限制、channel 1h cache write 价格、group Fast/reasoning policy 字段等。部署前必须确认 dump 成功、预留维护窗口，并接受“若需 schema 回滚必须人工恢复数据库”的边界；不能只依赖 binary 自动回滚。
+
+### 12.4 现有服务器固化 HTTPS Proxy 探针
+
+对于早于本手册收尾补丁安装、网页 Proxy 测试仍调用 HTTP/80 的服务器，先从与当前服务器 OS 对应的已验证分支上传当前 `deploy/company-activate-egress.sh`（它不属于五文件 `company-ops` artifact），并安装：
+
+~~~bash
+sudo install -o root -g root -m 0755 \
+  /root/release/company-activate-egress.sh \
+  /usr/local/sbin/company-activate-egress
+~~~
+
+然后执行一次：
+
+~~~bash
+sudo /usr/local/sbin/company-activate-egress \
+  --env /root/company-server.env \
+  --reconcile-config-only
+sudo companyctl verify
+~~~
+
+该模式只锁定部署/Route 操作、备份 `config.yaml`、写入 direct fallback=false 与两个精确 HTTPS 探针、重启并等待 `/health`；失败时恢复旧配置。它不会重建数据库、Route、ProxyID 或服务器。成功标志为 `COMPANY_PROXY_PROBE_RECONCILED=1`。
 
 ## 13. 日常运行手册
 
@@ -714,11 +762,11 @@ Sub2API UID 不允许直接访问公网或 DNS，因此上游定价文件在线�
 
 ### 发布与回滚
 
-- [ ] 更新前数据库 dump 已通过 `pg_restore --list`；
+- [ ] 部署输出了本次 `DATABASE_BACKUP=`，自动 custom dump 与 `pg_restore --list` 均成功；
 - [ ] binary/ops 原子部署已演练；
-- [ ] 自动 binary/ops 回滚已演练；
+- [ ] 自动 binary/config/ops 回滚已演练；
 - [ ] 数据库 schema 回滚步骤和维护窗口已记录；
-- [ ] Ubuntu 22.04 分支已单独完成合并与 CI，而不是误用 24.04 artifact。
+- [ ] `latest.json` 中 Company 与 Ubuntu 22.04 两套 CI/Security 均成功，服务器使用了对应 OS 分支的文件。
 
 ## 17. 禁止事项
 
@@ -743,7 +791,6 @@ Sub2API UID 不允许直接访问公网或 DNS，因此上游定价文件在线�
 
 为避免误解，以下能力当前不是现有脚本的一键功能：
 
-- Ubuntu 22.04 兼容分支自动跟进 upstream；
 - 内网 DNS、公司 CA 证书签发和 Nginx 内网 HTTPS全自动配置；
 - Route 在线编辑、删除和账号无损迁移；
 - `companyctl account audit` 判断每个国际账号“业务期望国家”；

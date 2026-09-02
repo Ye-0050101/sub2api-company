@@ -103,6 +103,26 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_AllFailed() {
 	require.ErrorContains(s.T(), err, "all probe URLs failed")
 }
 
+func (s *ProxyProbeServiceSuite) TestProbeProxy_DoesNotFollowRedirects() {
+	s.prober.configuredProbeURLs = []configuredProbeTarget{
+		{url: "https://probe.example/start", parser: "ipify"},
+	}
+	requests := 0
+	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if strings.Contains(r.RequestURI, "redirected.example") {
+			_, _ = io.WriteString(w, `{"ip":"1.2.3.4"}`)
+			return
+		}
+		http.Redirect(w, r, "https://redirected.example/result", http.StatusFound)
+	}))
+
+	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
+	require.Error(s.T(), err)
+	require.ErrorContains(s.T(), err, "status: 302")
+	require.Equal(s.T(), 1, requests, "probe client must not follow redirects")
+}
+
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {
 	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.RequestURI, "ip-api.com") {
