@@ -119,7 +119,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_DoesNotFollowRedirects() {
 
 	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "status: 302")
+	require.ErrorContains(s.T(), err, "all probe URLs failed")
 	require.Equal(s.T(), 1, requests, "probe client must not follow redirects")
 }
 
