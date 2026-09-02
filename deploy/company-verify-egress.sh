@@ -70,6 +70,24 @@ print(f"INFO {label} exit={a} country={country}")
 PY
 }
 
+verify_proxy_probe_config() {
+  python3 - /opt/sub2api/config.yaml <<'PY'
+import sys
+import yaml
+
+cfg = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+actual = (cfg.get("security") or {}).get("proxy_probe") or {}
+expected = {
+    "insecure_skip_verify": False,
+    "urls": [
+        {"url": "https://api.ipify.org?format=json", "parser": "ipify"},
+        {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
+    ],
+}
+raise SystemExit(0 if actual == expected else 1)
+PY
+}
+
 failures=0
 check() {
   local label=$1
@@ -81,6 +99,7 @@ check "sub2api.service active" systemctl is-active --quiet sub2api.service
 check "service user" test "$(systemctl show sub2api.service -p User --value)" = "sub2api"
 check "service group" test "$(systemctl show sub2api.service -p Group --value)" = "sub2api"
 check "binary exists" test -x /opt/sub2api/sub2api
+check "exact HTTPS proxy probe policy" verify_proxy_probe_config
 
 binary_sha=$(sha256sum /opt/sub2api/sub2api | awk '{print $1}')
 echo "INFO binary_sha256=$binary_sha"

@@ -91,6 +91,14 @@ func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*s
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create proxy client: %w", err)
 	}
+	// Probe targets are an audited exact list. Clone the pooled client so this
+	// call cannot follow an approved HTTPS URL to an unapproved destination,
+	// without mutating the shared client's redirect policy for other callers.
+	probeClient := *client
+	probeClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	client = &probeClient
 
 	var lastErr error
 	if len(s.configuredProbeURLs) > 0 {

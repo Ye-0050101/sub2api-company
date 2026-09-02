@@ -19,10 +19,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $(id -u) -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
-[[ $db_backup_confirmed -eq 1 ]] || {
-  echo "Refusing: confirm a current database backup first" >&2
-  exit 1
-}
+if [[ $db_backup_confirmed -eq 1 ]]; then
+  echo "INFO: --db-backup-confirmed is accepted for compatibility; a new verified backup is still mandatory"
+fi
 [[ -f $binary && -n $expected_sha ]] || { echo "Binary and SHA256 are required" >&2; exit 2; }
 
 actual_sha=$(sha256sum "$binary" | awk '{print $1}')
@@ -114,12 +113,71 @@ grep -Eq "(udp|tcp)[[:space:]]+dport[[:space:]]+53" <<<"$guard_rules" || {
 
 exec 9>/run/lock/sub2api-company-deploy.lock
 flock -n 9 || { echo "Another company deployment is running" >&2; exit 1; }
+exec 8>/run/lock/sub2api-company-route.lock
+flock -n 8 || { echo "A Company route operation is running" >&2; exit 1; }
+
+database_name=$(python3 - /opt/sub2api/config.yaml <<'PY'
+import re
+import sys
+import yaml
+
+cfg = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+name = str((cfg.get("database") or {}).get("dbname") or "")
+if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+    raise SystemExit("database.dbname is missing or unsafe")
+print(name)
+PY
+) || { echo "Refusing: cannot determine the application database" >&2; exit 1; }
+backup_root=/var/backups/sub2api
+backup_timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+database_backup="$backup_root/${database_name}-predeploy-${backup_timestamp}.dump"
+database_backup_tmp="${database_backup}.tmp.$$"
+install -d -o root -g postgres -m 0750 "$backup_root"
+database_size_bytes=$(sudo -u postgres psql -X -At -d postgres \
+  -c "SELECT pg_database_size('$database_name');")
+[[ $database_size_bytes =~ ^[0-9]+$ ]] || {
+  echo "Refusing: cannot determine PostgreSQL database size" >&2
+  exit 1
+}
+available_bytes=$(df --output=avail -B1 "$backup_root" | tail -n 1 | tr -d ' ')
+[[ $available_bytes =~ ^[0-9]+$ ]] || {
+  echo "Refusing: cannot determine backup filesystem free space" >&2
+  exit 1
+}
+minimum_backup_space=$((database_size_bytes * 2 + 64 * 1024 * 1024))
+[[ $available_bytes -ge $minimum_backup_space ]] || {
+  echo "Refusing: insufficient free space for a verified database backup" >&2
+  echo "database_bytes=$database_size_bytes available_bytes=$available_bytes required_bytes=$minimum_backup_space" >&2
+  exit 1
+}
+[[ ! -e $database_backup && ! -e $database_backup_tmp ]] || {
+  echo "Refusing: database backup target already exists" >&2
+  exit 1
+}
+install -o postgres -g postgres -m 0600 /dev/null "$database_backup_tmp"
+if ! sudo -u postgres pg_dump --format=custom --no-owner --no-acl \
+    --file "$database_backup_tmp" "$database_name"; then
+  rm -f -- "$database_backup_tmp"
+  echo "Refusing: PostgreSQL backup failed" >&2
+  exit 1
+fi
+if ! pg_restore --list "$database_backup_tmp" >/dev/null; then
+  rm -f -- "$database_backup_tmp"
+  echo "Refusing: PostgreSQL backup validation failed" >&2
+  exit 1
+fi
+chown root:root "$database_backup_tmp"
+chmod 0600 "$database_backup_tmp"
+mv -f "$database_backup_tmp" "$database_backup"
+echo "DATABASE_BACKUP=$database_backup"
+echo "DATABASE_BACKUP_SHA256=$(sha256sum "$database_backup" | awk '{print $1}')"
 
 release_dir="/opt/sub2api/releases/${expected_sha}"
 rollback_dir="/opt/sub2api/releases/rollback-$(date -u +%Y%m%dT%H%M%SZ)"
 install -d -m 0755 "$release_dir" "$rollback_dir"
 install -m 0755 "$binary" "$release_dir/sub2api"
 cp -a /opt/sub2api/sub2api "$rollback_dir/sub2api"
+cp -a /opt/sub2api/config.yaml "$rollback_dir/config.yaml"
 ops_backup_ready=0
 if [[ -n $ops_dir ]]; then
   install -d -m 0755 "$rollback_dir/ops"
@@ -130,9 +188,6 @@ if [[ -n $ops_dir ]]; then
   done
   ops_backup_ready=1
 fi
-
-install -m 0755 "$release_dir/sub2api" /opt/sub2api/.sub2api.company.new
-mv -f /opt/sub2api/.sub2api.company.new /opt/sub2api/sub2api
 
 restore_ops() {
   [[ $ops_backup_ready -eq 1 ]] || return 0
@@ -154,20 +209,83 @@ install_ops() {
   done
 }
 
+rollback_running=0
+new_binary_may_have_migrated=0
 rollback() {
-  echo "Deployment failed; restoring previous binary and operations tools" >&2
-  install -m 0755 "$rollback_dir/sub2api" /opt/sub2api/.sub2api.company.rollback
-  mv -f /opt/sub2api/.sub2api.company.rollback /opt/sub2api/sub2api
+  trap - ERR INT TERM
+  if [[ $rollback_running -eq 1 ]]; then
+    exit 1
+  fi
+  rollback_running=1
+  echo "Deployment failed; restoring previous binary, config, and operations tools" >&2
+  echo "Database was not restored automatically; verified backup retained at: $database_backup" >&2
+  systemctl stop sub2api.service >/dev/null 2>&1 || true
+  install -m 0755 "$rollback_dir/sub2api" /opt/sub2api/.sub2api.company.rollback || true
+  mv -f /opt/sub2api/.sub2api.company.rollback /opt/sub2api/sub2api || true
+  cp -a "$rollback_dir/config.yaml" /opt/sub2api/config.yaml || true
   restore_ops || true
-  systemctl restart sub2api.service || true
+  if [[ $new_binary_may_have_migrated -eq 0 ]]; then
+    systemctl restart sub2api.service || true
+  else
+    echo "Sub2API remains stopped because the new binary may have migrated the database." >&2
+    echo "Restore the reported dump or explicitly verify old-binary schema compatibility before starting it." >&2
+  fi
   exit 1
 }
+trap rollback ERR INT TERM
 
+python3 - /opt/sub2api/config.yaml <<'PY' || rollback
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+import yaml
+
+path = Path(sys.argv[1])
+info = path.stat()
+cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+security = cfg.setdefault("security", {})
+security.setdefault("proxy_fallback", {})["allow_direct_on_error"] = False
+security["proxy_probe"] = {
+    "insecure_skip_verify": False,
+    "urls": [
+        {"url": "https://api.ipify.org?format=json", "parser": "ipify"},
+        {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
+    ],
+}
+temporary = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.company.",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        yaml.safe_dump(cfg, handle, allow_unicode=True, sort_keys=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chown(temporary, info.st_uid, info.st_gid)
+    os.chmod(temporary, stat.S_IMODE(info.st_mode))
+    os.replace(temporary, path)
+    temporary = None
+finally:
+    if temporary is not None:
+        temporary.unlink(missing_ok=True)
+PY
+
+install -m 0755 "$release_dir/sub2api" /opt/sub2api/.sub2api.company.new || rollback
+mv -f /opt/sub2api/.sub2api.company.new /opt/sub2api/sub2api || rollback
+
+new_binary_may_have_migrated=1
 systemctl restart sub2api.service || rollback
 for _ in $(seq 1 60); do
   if systemctl is-active --quiet sub2api.service && \
      curl --noproxy '*' --fail --silent --max-time 2 http://127.0.0.1:8080/health >/dev/null; then
     install_ops || rollback
+    trap - ERR INT TERM
     echo "Sub2API deployment healthy: $expected_sha"
     [[ -z $ops_dir ]] || echo "Company operations updated: $ops_manifest_sha"
     exit 0
