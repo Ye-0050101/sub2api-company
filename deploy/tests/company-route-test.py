@@ -139,6 +139,10 @@ class CompanyRouteTest(unittest.TestCase):
         route = company_route.normalize(route_spec(), selected)
         candidate = route["candidates"][1]
         self.assertEqual(candidate["node_ports"], [8443, 8444, 8445])
+        self.assertEqual(
+            candidate["outbound"]["server_ports"],
+            ["8443:8443", "8444:8444", "8445:8445"],
+        )
         guard = company_route.guard(route, 999)
         self.assertIn("udp dport { 8443, 8444, 8445 }", guard)
 

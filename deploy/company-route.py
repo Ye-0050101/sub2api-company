@@ -105,7 +105,10 @@ def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, list[int
             if checked in node_ports:
                 raise RouteError(f"{label}.server_ports contains a duplicate port")
             node_ports.append(checked)
-        outbound["server_ports"] = [str(value) for value in node_ports]
+        # sing-box server_ports accepts port ranges, not scalar ports. Encode
+        # each approved exact port as a one-port range while keeping the
+        # nftables allowlist and metadata as canonical integers.
+        outbound["server_ports"] = [f"{value}:{value}" for value in node_ports]
         outbound.pop("server_port", None)
     else:
         node_ports = [port(outbound.get("server_port"), f"{label}.server_port")]
