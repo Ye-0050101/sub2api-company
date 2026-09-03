@@ -41,6 +41,8 @@ RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/stor
 # Copy only that subtree to keep the build dependency minimal.
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
+COPY COMPANY_VERSION /app/COMPANY_VERSION
+COPY backend/cmd/server/VERSION /app/backend/cmd/server/VERSION
 RUN pnpm run build
 
 # -----------------------------------------------------------------------------

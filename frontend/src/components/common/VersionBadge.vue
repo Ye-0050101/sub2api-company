@@ -1,5 +1,6 @@
 <template>
-  <div class="relative">
+  <CompanyVersionBadge v-if="isCompanyVersion(currentVersion)" :version="currentVersion" />
+  <div v-else class="relative">
     <!-- Admin: Full version badge with dropdown -->
     <template v-if="isAdmin">
       <button
@@ -667,6 +668,8 @@ import {
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import CompanyVersionBadge from '@/components/common/CompanyVersionBadge.vue'
+import { isCompanyVersion } from '@/utils/companyBuild'
 
 const GITHUB_REPO = 'Wei-Shaw/sub2api'
 // Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
@@ -693,7 +696,7 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
-const isCompanyBuild = computed(() => buildType.value === 'company')
+const isCompanyBuild = computed(() => buildType.value === 'company' || isCompanyVersion(currentVersion.value))
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -928,7 +931,7 @@ function handleClickOutside(event: MouseEvent) {
 }
 
 onMounted(() => {
-  if (isAdmin.value) {
+  if (isAdmin.value && !isCompanyVersion(currentVersion.value)) {
     // Use cached version if available, otherwise fetch
     appStore.fetchVersion(false)
   }

@@ -388,6 +388,30 @@ REQUIRED_SOURCE = {
         'v-if="isCompanyBuild"',
         "version.companyManagedHint",
         "if (isCompanyBuild.value || updating.value) return",
+        "buildType.value === 'company' || isCompanyVersion(currentVersion.value)",
+    ),
+    "frontend/src/utils/companyBuild.ts": (
+        "../../../COMPANY_VERSION?raw",
+        "../../../backend/cmd/server/VERSION?raw",
+        "/^company-[0-9a-f]{40}$/",
+        "Company v${companyReleaseVersion}",
+    ),
+    "frontend/src/views/HomeView.vue": (
+        'v-else-if="compactHomeEnabled"',
+        'v-else-if="isCompanyVersion(siteVersion)"',
+    ),
+    "frontend/src/components/home/CompanyHome.vue": (
+        "prefers-reduced-motion: reduce",
+        "CompanyVersionBadge",
+        "props.isAuthenticated ? props.dashboardPath : '/login'",
+    ),
+    "Dockerfile": (
+        "COPY COMPANY_VERSION /app/COMPANY_VERSION",
+        "COPY backend/cmd/server/VERSION /app/backend/cmd/server/VERSION",
+    ),
+    "deploy/Dockerfile": (
+        "COPY COMPANY_VERSION /app/COMPANY_VERSION",
+        "COPY backend/cmd/server/VERSION /app/backend/cmd/server/VERSION",
     ),
     "backend/internal/service/openai_codex_account_identity.go": (
         "resolveConfiguredManagedAccount(",
@@ -514,6 +538,13 @@ def audit_production_network_primitives(failures: list[str]) -> None:
 
 def main() -> int:
     failures: list[str] = []
+
+    company_version_path = ROOT / "COMPANY_VERSION"
+    if not company_version_path.is_file() or not re.fullmatch(
+        r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)",
+        company_version_path.read_text(encoding="utf-8").strip(),
+    ):
+        failures.append("COMPANY_VERSION must contain one major.minor.patch release version")
 
     alias_fixture = 'import stdhttp "net/http"\nvar c = &stdhttp.Client{}\n'
     normalized_fixture = normalize_go_network_package_aliases(alias_fixture)
