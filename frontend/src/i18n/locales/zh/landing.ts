@@ -32,8 +32,8 @@ export default {
       visibilityDescription: '密钥与用量记录集中查看，\n服务范围以管理员配置为准。',
       footer: '为日常工作，建立清晰的 AI 使用方式。',
       guideTitle: '简单三步，接入工作。',
-      guideStep1: '向管理员申请账号与服务权限。',
-      guideStep2: '登录控制台，创建个人 API 密钥。',
+      guideStep1: '在公司局域网内，使用汉森企业邮箱注册账号。',
+      guideStep2: '登录控制台，选择所属部门分组，创建个人 API 密钥。',
       guideStep3: '按公司接入指南配置工具并开始使用。'
     },
     viewOnGithub: '在 GitHub 上查看',

@@ -81,7 +81,8 @@ describe('Company homepage integration', () => {
     expect(wrapper.text()).toContain('Saved subtitle')
     expect(wrapper.find('a[href^="javascript:"]').exists()).toBe(false)
     await wrapper.get('button.hs-secondary').trigger('click')
-    expect(wrapper.get('[role="dialog"]').text()).toContain('向管理员申请账号')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('在公司局域网内，使用汉森企业邮箱注册账号。')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('登录控制台，选择所属部门分组，创建个人 API 密钥。')
     wrapper.unmount()
   })
   it('supports existing guide links, motion control and theme switching', async () => {
@@ -96,11 +97,14 @@ describe('Company homepage integration', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(true)
     wrapper.unmount()
   })
-  it('renders English Company content without supplier marketing', () => {
+  it('renders English Company content without supplier marketing', async () => {
     const wrapper = render({}, 'en')
     expect(wrapper.text()).toContain('Employee sign in')
     expect(wrapper.text()).toContain('Controlled routing')
     expect(wrapper.text()).not.toContain('Pay As You Go')
+    await wrapper.get('button.hs-secondary').trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('On the company local network, register using your Hoson corporate email address.')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Sign in to the console, select your department group, and create a personal API key.')
     wrapper.unmount()
   })
 })

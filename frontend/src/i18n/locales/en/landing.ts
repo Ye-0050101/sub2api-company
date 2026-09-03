@@ -32,8 +32,8 @@ export default {
       visibilityDescription: 'View keys and usage in one place.\nAvailable services are set by your administrator.',
       footer: 'A clearer way to use AI at work.',
       guideTitle: 'Three steps to get started.',
-      guideStep1: 'Ask your administrator for an account and service access.',
-      guideStep2: 'Sign in to the console and create a personal API key.',
+      guideStep1: 'On the company local network, register using your Hoson corporate email address.',
+      guideStep2: 'Sign in to the console, select your department group, and create a personal API key.',
       guideStep3: 'Configure your tools using your company access guide.'
     },
     viewOnGithub: 'View on GitHub',
