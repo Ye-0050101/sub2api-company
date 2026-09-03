@@ -3,10 +3,12 @@ set -Eeuo pipefail
 
 env_file=""
 reconcile_config_only=0
+defer_http=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env) env_file=$2; shift ;;
     --reconcile-config-only) reconcile_config_only=1 ;;
+    --defer-http) defer_http=1 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -28,6 +30,25 @@ do
   [[ -n ${!name:-} ]] || die "missing $name"
 done
 [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 || $COMPANY_ENABLE_PUBLIC_TLS == 1 ]] || die "COMPANY_ENABLE_PUBLIC_TLS must be 0 or 1"
+web_mode=${COMPANY_WEB_MODE:-}
+if [[ -z $web_mode ]]; then
+  if [[ $COMPANY_ENABLE_PUBLIC_TLS == 1 ]]; then web_mode=public-https; else web_mode=preserve; fi
+fi
+[[ $web_mode == preserve || $web_mode == http || $web_mode == public-https ]] || die "COMPANY_WEB_MODE must be preserve, http or public-https"
+web_http_args=()
+if [[ $web_mode == http ]]; then
+  [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 ]] || die "HTTP mode requires COMPANY_ENABLE_PUBLIC_TLS=0"
+  [[ ${COMPANY_HTTP_ACKNOWLEDGE_PLAINTEXT:-0} == 1 ]] || die "HTTP requires COMPANY_HTTP_ACKNOWLEDGE_PLAINTEXT=1"
+  [[ -n ${COMPANY_WEB_LISTEN_IP:-} && -n ${COMPANY_WEB_ALLOW_CIDRS:-} ]] || die "HTTP listen IP and approved company CIDRs are required"
+  web_http_args=(--listen-ip "$COMPANY_WEB_LISTEN_IP" --server-name "$COMPANY_DOMAIN" --acknowledge-plaintext)
+  IFS=',' read -r -a web_cidrs <<<"$COMPANY_WEB_ALLOW_CIDRS"
+  for web_cidr in "${web_cidrs[@]}"; do web_http_args+=(--allow-cidr "$web_cidr"); done
+  python3 /usr/local/sbin/companyctl web http "${web_http_args[@]}" --check >/dev/null
+elif [[ $web_mode == public-https ]]; then
+  [[ $COMPANY_ENABLE_PUBLIC_TLS == 1 ]] || die "public-https requires COMPANY_ENABLE_PUBLIC_TLS=1"
+elif [[ $COMPANY_ENABLE_PUBLIC_TLS != 0 ]]; then
+  die "preserve mode requires COMPANY_ENABLE_PUBLIC_TLS=0"
+fi
 
 stage=/var/lib/sub2api-company-bootstrap
 singbox=/opt/sub2api-egress/bin/sing-box
@@ -328,7 +349,15 @@ if runuser -u sub2api -- curl --proto '=https' --noproxy '*' -fsS \
   die "Sub2API UID can still reach public direct egress"
 fi
 
-if [[ $COMPANY_ENABLE_PUBLIC_TLS == 1 ]]; then
+if [[ $web_mode == http ]]; then
+  if [[ $defer_http -eq 0 ]]; then
+    if ! /usr/local/sbin/companyctl web http "${web_http_args[@]}" --disable-default-site; then
+      echo "COMPANY_APPLICATION_READY_HTTP_FAILED=1" >&2
+      echo "Egress/application remain activated. Do not rerun activation; retry companyctl web http after correcting web parameters." >&2
+      exit 1
+    fi
+  fi
+elif [[ $web_mode == public-https ]]; then
   install -d -o www-data -g www-data -m 0755 /var/www/certbot
   rm -f /etc/nginx/sites-enabled/default
   cat >/etc/nginx/sites-available/sub2api-acme <<NGINX

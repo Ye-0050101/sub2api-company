@@ -3,6 +3,8 @@
 > 适用范围：Company Egress V1。本文以仓库现有脚本和代码为准，不把规划中的能力写成已经实现。
 >
 > 当前实现已跟进官方 Sub2API v0.2.0，并维护两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以 `dist/company/latest.json` 记录的提交和制品为准，不以本文中的示例值判断。
+>
+> 本轮新增入口管理的说明基于本地代码；未进行服务器实机部署、备份恢复或回滚验收。以下命令和检查表是操作要求，不代表目标服务器已通过验收。
 
 ## 1. 目标、范围与不变量
 
@@ -37,7 +39,11 @@ V1 明确不支持或禁止：Antigravity、Grok password/captcha、Gemini Batch
     │             ↓
     │       127.0.0.1:8080
     │
-    └─ 长期内网：公司 DNS/证书 + Nginx:443
+    ├─ 经批准的明文内网：指定 LAN IPv4 + Nginx:80
+    │             ↓
+    │       127.0.0.1:8080
+    │
+    └─ 长期内网推荐：公司 DNS/证书 + Nginx:443
                   ↓
              127.0.0.1:8080
                   ↓
@@ -208,6 +214,29 @@ COMPANY_ENABLE_PUBLIC_TLS=0
 
 即使关闭公网 TLS，`COMPANY_DOMAIN` 仍是脚本必填项；可以填写合法的内部名称，但脚本不会自动为它建立公司 DNS 或内网证书。
 
+入口配置兼容关系如下；`COMPANY_ENABLE_PUBLIC_TLS` 仍为必填的 `0/1`，不会因增加新变量而改变旧 env 的含义：
+
+| `COMPANY_WEB_MODE` | `COMPANY_ENABLE_PUBLIC_TLS` | 行为 |
+|---|---:|---|
+| 未设置或空 | `0` | `preserve`：保留现有站点配置，不自动创建 HTTP 入口 |
+| 未设置或空 | `1` | `public-https`：沿用 Certbot/Let’s Encrypt 流程 |
+| `preserve` | `0` | 明确保留现有站点配置 |
+| `http` | `0` | 明确配置 LAN HTTP；还必须填写下面的变量 |
+| `public-https` | `1` | 明确使用原公网 HTTPS 流程 |
+
+fresh installer 与完整 activate 流程都支持可选的 HTTP 配置。只有经批准接受明文风险后，才在上述 env 基础上增加或替换：
+
+~~~ini
+COMPANY_ENABLE_PUBLIC_TLS=0
+COMPANY_WEB_MODE=http
+COMPANY_DOMAIN=hsaiapi.company.example
+COMPANY_WEB_LISTEN_IP=192.168.1.175
+COMPANY_WEB_ALLOW_CIDRS=192.168.1.0/24,172.16.40.0/24
+COMPANY_HTTP_ACKNOWLEDGE_PLAINTEXT=1
+~~~
+
+域名、IP、CIDR 全是示例，真实域名、解析及允许访问的精确网段必须由公司 IT 提供；CIDR 用逗号分隔、不夹空格。HTTP 模式会先校验并渲染参数，激活时调用 `companyctl web http`，并仅允许移除发行版 default 站点链接。它不会自动接管旧手工 Company 站点；已有服务器只调整入口时使用第 6.3 节，不要重跑 fresh installer 或完整 activate。`preserve` 仅指保留站点配置，不表示完整安装/激活流程没有其他副作用。
+
 ### 5.5 执行安装
 
 先清理 Windows CRLF 并检查语法：
@@ -249,6 +278,8 @@ COMPANY_FRESH_INSTALL_READY=1
 
 脚本会创建数据库和管理员、CN Proxy、CN listener、Sub2API UID kill-switch、systemd 服务并做一次验证。失败时只清理本轮创建的应用资源；不要在失败后手工删除未知目录，先阅读 `journalctl` 和脚本错误。
 
+HTTP 入口是最后的独立事务：fresh 先验证应用和出口，再启用 HTTP；若此时出现 `COMPANY_APPLICATION_READY_HTTP_FAILED=1`，已验证的应用和数据库会保留，Nginx 尝试恢复旧状态。此时只修正参数并重试 `companyctl web http`，不要重新运行 fresh install。迁移后的完整 activate 也会用同一标志提示仅重试 HTTP 步骤。
+
 fresh installer 会固定普通 Proxy 网页测试为以下精确配置，避免官方 HTTP 探针与仅允许 HTTPS 的 CN guard 冲突：
 
 ~~~text
@@ -266,7 +297,7 @@ systemctl is-active postgresql redis-server sub2api.service \
   sub2api-egress-cn.service sub2api-egress-guard.service
 curl --noproxy '*' -fsS http://127.0.0.1:8080/health
 sudo companyctl route list
-sudo companyctl verify
+sudo companyctl verify --sha256 <可信发布记录中的BINARY_SHA256>
 ~~~
 
 首次安装后 `companyctl route list` 显示 `No managed international routes` 是正常的，CN_DIRECT 不在国际 Route 列表中。
@@ -303,11 +334,57 @@ http://127.0.0.1:18080
 - 公司 CA 签发的证书及私钥，或公司批准的证书申请方式；
 - 允许指定管理网段访问虚拟机 TCP 443 的防火墙规则。
 
-当前脚本的 `COMPANY_ENABLE_PUBLIC_TLS=1` 使用 Certbot/Let’s Encrypt，适用于可从公网完成 ACME 验证且已有备案/批准域名的环境，不等同于内网 CA 自动配置。只有私有 IP 时不要直接开启该选项。
+当前脚本未设置 `COMPANY_WEB_MODE` 且 `COMPANY_ENABLE_PUBLIC_TLS=1` 时，沿用 Certbot/Let’s Encrypt；显式配置则使用 `COMPANY_WEB_MODE=public-https` 与同一旧标志。这适用于可从公网完成 ACME 验证且已有备案/批准域名的环境，不等同于内网 CA 自动配置。只有私有 IP 时不要直接开启该选项。
 
 禁止：把 Sub2API 改成监听 `0.0.0.0:8080`、向整个局域网开放 8080、使用未受控的公网反向隧道。
 
 Nginx 只解决“已能到达公司内网的设备如何以 HTTPS 进入网站”，不会把私有 IP 变成公网可达地址。外出、手机热点或家庭网络访问必须使用公司批准的 VPN、零信任访问网关或堡垒机；VPN/网关应由公司 IT 管理身份、MFA、设备策略和内网路由。不要在这台虚拟机上自行做公网端口映射来替代公司 VPN，也不要把 AI egress 的 sing-box listener 当作入站 VPN。
+
+### 6.3 可选：参数化 LAN HTTP 入口
+
+`companyctl web http` 仅用于经公司批准的明文内网场景。HTTP 会明文传输管理员登录凭据、会话、API key 及请求内容；CIDR allowlist 不能提供加密，也不能消除同网段窃听或篡改风险。优先使用 SSH 隧道或 HTTPS，接受风险时才显式传入 `--acknowledge-plaintext`。
+
+先使用与目标服务器匹配的新版 `companyctl`。以下域名、IP、网段仅演示语法，执行前必须替换为公司 IT 批准值；不能据此认定 `192.168.1.0/24` 或任何示例网段已经获准。
+
+只校验参数并输出配置，不改变服务器状态：
+
+~~~bash
+sudo companyctl web http \
+  --listen-ip 192.168.1.175 \
+  --server-name hsaiapi.company.example \
+  --allow-cidr 192.168.1.0/24 \
+  --allow-cidr 172.16.40.0/24 \
+  --acknowledge-plaintext \
+  --check
+~~~
+
+`--check` 不安装包、不写配置、不获取变更锁、不启动或重载 Nginx；也不检查该 IP 是否已配置到服务器、不检查现有站点、不执行 `nginx -t` 或健康探测。它只证明输入能被校验和渲染，不能代替部署验收。
+
+审阅输出与现有 Nginx 配置后，实际应用示例：
+
+~~~bash
+sudo companyctl web http \
+  --listen-ip 192.168.1.175 \
+  --server-name hsaiapi.company.example \
+  --allow-cidr 192.168.1.0/24 \
+  --allow-cidr 172.16.40.0/24 \
+  --acknowledge-plaintext \
+  --disable-default-site
+~~~
+
+参数和接管边界：
+
+- `--listen-ip` 必须是本机已分配的 RFC1918 IPv4，只监听该地址的 TCP 80，不监听公网、IPv6 或 `0.0.0.0`。
+- `--server-name` 使用不含协议、端口或路径的 ASCII 主机名；脚本不创建 DNS。配置允许该名称及指定 LAN IP 的 Host，其他 Host 返回 444。
+- `--server-name` 仅配置 Nginx Host，不自动修改数据库中的系统设置或 API 端点地址；网站设置请按需在网页填写，并在更新前后自行确认。
+- `--allow-cidr` 至少一个，可重复，必须是严格网络边界的 RFC1918 IPv4 CIDR；其余客户端拒绝。另允许服务器监听地址自身的 `/32`，供本机健康探测使用。
+- 只管理 `/etc/nginx/sites-available/sub2api-company` 和对应 `sites-enabled/sub2api-company` 链接。已有同名手工配置没有 managed 标记时，必须审阅旧配置后额外传 `--replace-existing` 才能替换；它不是覆盖任意站点的许可。
+- `--disable-default-site` 只允许移除 `/etc/nginx/sites-enabled/default` 且其目标必须是发行版 `/etc/nginx/sites-available/default`；不删除目标文件、不删除其他站点。default 是普通文件、链接目标异常或存在其他已启用站点时拒绝，不能用该参数强行接管。
+- 独立命令要求已安装 Nginx，不安装包、不自动开放公司防火墙。上线前还需 IT 批准对应客户端到指定 LAN IP 的 TCP 80；保持 8080 仅回环。
+
+应用会取得 deploy/route/web 锁，检查 `nginx -T` 实际配置树及回环 `/health`；目标 Company 站点和明确同意移除的发行版 default 之外，任何其他 server/listen 配置（包括 conf.d）都会拒绝，避免启用未审计入口。然后在 `/var/backups/sub2api/web-http-*` 保存旧站点内容及链接/服务状态，再写入配置、检查语法、重载或启动 Nginx、经 LAN 入口探测 `/health` 并启用服务。成功输出 `COMPANY_HTTP_READY ... backup=...`。失败或受处理的中断会尝试恢复旧文件、链接和 Nginx 状态；出现 `nginx rollback needs operator attention` 必须人工处理，不能把备份目录或成功渲染当成回滚已验收。
+
+该独立命令不修改数据库、Sub2API 的 `127.0.0.1:8080` 监听、证书材料、sing-box、ProxyID 或 egress nftables/TLS 策略。若明确替换了包含 HTTPS 的同名手工站点，保留证书材料不等于保留原 HTTPS 入口。应用后须从允许及不允许的客户端分别验证访问、拒绝和业务流式响应，并确认 egress 验证仍通过；本轮尚未在真实服务器完成这些验收及备份回滚演练。
 
 ## 7. CN_DIRECT
 
@@ -379,6 +456,8 @@ sudo companyctl route add
 - TUIC 有显式 pin 时使用显式 pin，否则使用同节点 HY2 pin；若证书公钥不同，该 TUIC 候选失败关闭；
 - 最终配置强制 `insecure=false`；
 - 不允许 detour 和节点 DNS resolver。
+
+VLESS + REALITY + Vision 目前仅处于分析范围，未实现 Company 导入、探测、guard 和 failover 支持；不要将 `vless://` 当作可导入候选，也不要绕过现有协议校验。
 
 ### 8.4 HY2 端口跳跃
 
@@ -467,12 +546,13 @@ ProxyID 是 Sub2API 数据库中 Proxy 的 ID，也是应用 policy 的不可变
 ~~~bash
 sudo companyctl route list
 sudo companyctl verify
+sudo companyctl verify --sha256 <可信发布记录中的BINARY_SHA256>
 sudo companyctl account audit
 ~~~
 
-`companyctl verify` 自动读取 CN policy、当前 binary SHA 和所有 `/etc/sub2api-egress/routes/*/metadata.json`，检查：
+`companyctl verify` 自动读取 CN policy、数据库中的 CN SOCKS 端口及所有 `/etc/sub2api-egress/routes/*/metadata.json`，执行主动出口探测并检查：
 
-- Sub2API 服务用户和 binary SHA；
+- Sub2API 服务用户和当前 binary SHA 观测值；仅提供 `--sha256` 时比较期望发布 hash；
 - PostgreSQL 16（当前 22.04分支 verifier 的明确要求）；
 - CN 和国际 sing-box 服务；
 - 国际 failover timers 和 nftables tables；
@@ -480,15 +560,20 @@ sudo companyctl account audit
 - Sub2API UID kill-switch、IPv6 deny、direct DNS deny；
 - 已指定 listeners 和当前 Sub2API TCP 连接。
 
+`--sha256` 是可选的 64 位十六进制期望值，应取自可信发布记录或经核验的对应 OS artifact。未提供时会提示 `binary integrity is not being certified`，仍执行出口验证，但不认证 binary 发布完整性；不再把当前已安装 binary 的 hash 作为其自身的期望值。不得将服务器现场 `sha256sum` 的结果直接回填来代替发布校验。
+
 ### 10.2 最小状态检查
 
 ~~~bash
+sudo companyctl status
 systemctl is-active sub2api.service
 curl --noproxy '*' -fsS http://127.0.0.1:8080/health
 sudo companyctl route list
 sudo nft list table inet sub2api_egress_guard
 sudo journalctl -u sub2api.service -n 80 --no-pager
 ~~~
+
+`companyctl status` 是轻量只读快照：查询 Sub2API、Nginx、egress guard、CN 服务状态，输出已安装 binary SHA 和本地 Route/selector 状态文件；不主动请求外部 IP 服务，不重启服务或修改数据库/配置。其 SHA 是观测值，selector 可能过期，不能替代 `verify` 的最新出口证据或发布完整性比较。
 
 ### 10.3 fail-closed 验收
 
@@ -687,7 +772,7 @@ curl --noproxy '*' -v http://127.0.0.1:8080/health
 journalctl -u sub2api.service -n 100 --no-pager
 ~~~
 
-SSH 隧道方式还需确认 Windows 隧道窗口仍在运行。本机健康正常但内网 HTTPS 异常时，检查 Nginx、证书、公司 DNS、443 防火墙；不要修改 AI egress guard 来修网站入站问题。
+SSH 隧道方式还需确认 Windows 隧道窗口仍在运行。本机健康正常但内网 HTTPS 异常时，检查 Nginx、证书、公司 DNS、443 防火墙；HTTP 模式则检查指定 LAN IP 的 80 监听、Host、客户端实际源 IP/CIDR 和公司防火墙。不要修改 AI egress guard 来修网站入站问题。
 
 ### Route 导入失败
 
@@ -748,7 +833,7 @@ Sub2API UID 不允许直接访问公网或 DNS，因此上游定价文件在线�
 - [ ] CN 固定 IPv4和批准 DNS 已填写并验证；
 - [ ] 所有国际 Route 的 A/B、国家、节点端口已验证；
 - [ ] nftables、IPv6 deny、direct DNS deny、UID kill-switch 均在；
-- [ ] `sudo companyctl verify` 全部 PASS；
+- [ ] `sudo companyctl verify --sha256 <可信发布记录中的BINARY_SHA256>` 全部 PASS；
 - [ ] 受控 BLOCK 泄漏验收通过。
 
 ### 账号与入口
@@ -757,7 +842,8 @@ Sub2API UID 不允许直接访问公网或 DNS，因此上游定价文件在线�
 - [ ] `sudo companyctl account audit` 通过；
 - [ ] 国际账号具体国家与账号—Route 台账一致；
 - [ ] 无托管 `custom_base_url`；
-- [ ] 网页入口使用 SSH tunnel 或批准的 Nginx HTTPS；
+- [ ] 网页入口使用 SSH tunnel、批准的 Nginx HTTPS，或已明确接受明文风险的受限 LAN HTTP；
+- [ ] HTTP（如使用）的真实域名/IP/CIDR 已经 IT 批准，并验证允许/拒绝访问及入口备份回滚；
 - [ ] 未向局域网直接开放 8080。
 
 ### 发布与回滚
@@ -796,5 +882,7 @@ Sub2API UID 不允许直接访问公网或 DNS，因此上游定价文件在线�
 - `companyctl account audit` 判断每个国际账号“业务期望国家”；
 - 数据库 migration 的自动逆向回滚；
 - 从任意订阅 URL 自动选择并永久保存节点。
+
+VLESS + REALITY + Vision 仍只分析、不支持；LAN HTTP 参数化入口已经有实现，但真实域名/CIDR 的 IT 审批、服务器部署和备份回滚验收不是本轮已完成事项。
 
 这些事项应通过变更单、审核和后续版本化工具实现，不能用临时放宽安全边界代替。

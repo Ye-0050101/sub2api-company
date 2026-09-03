@@ -2,8 +2,13 @@
 
 import base64
 import importlib.util
+import io
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 from unittest import mock
 import unittest
 
@@ -17,6 +22,121 @@ SPEC.loader.exec_module(companyctl)
 
 
 class CompanyCtlTest(unittest.TestCase):
+    def test_lan_http_render_keeps_egress_and_forwarded_identity_separate(self):
+        rendered = companyctl.render_lan_http("192.168.1.175", "Hsaiapi.corp.example", ["172.16.40.0/24"])
+        self.assertIn("listen 192.168.1.175:80", rendered)
+        self.assertIn("server_name hsaiapi.corp.example 192.168.1.175;", rendered)
+        self.assertIn("allow 172.16.40.0/24;", rendered)
+        self.assertIn("deny all;", rendered)
+        self.assertIn("return 444;", rendered)
+        self.assertIn("proxy_pass http://127.0.0.1:8080;", rendered)
+        self.assertIn("X-Forwarded-For $remote_addr", rendered)
+        for forbidden in ("listen 0.0.0.0", "listen [::]", "ssl_certificate", "nft", "sing-box"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_lan_http_rejects_public_or_injected_configuration(self):
+        for ip, host, nets in (
+            ("0.0.0.0", "corp.example", ["192.168.1.0/24"]),
+            ("8.8.8.8", "corp.example", ["192.168.1.0/24"]),
+            ("::1", "corp.example", ["192.168.1.0/24"]),
+            ("192.168.1.175", "corp.example;include /etc/passwd", ["192.168.1.0/24"]),
+            ("192.168.1.175", "https://corp.example", ["192.168.1.0/24"]),
+            ("192.168.1.175", "8.8.8.8", ["192.168.1.0/24"]),
+            ("192.168.1.175", "192.168.1.176", ["192.168.1.0/24"]),
+            ("192.168.1.175", "corp.example", ["0.0.0.0/0"]),
+            ("192.168.1.175", "corp.example", ["192.168.1.4/24"]),
+            ("192.168.1.175", "corp.example", []),
+        ):
+            with self.subTest(ip=ip, host=host, nets=nets):
+                with self.assertRaises((companyctl.CompanyCtlError, ValueError)):
+                    companyctl.render_lan_http(ip, host, nets)
+
+    def test_lan_http_preview_does_not_apply(self):
+        args = companyctl.argparse.Namespace(acknowledge_plaintext=True, check=True, listen_ip="192.168.1.175", server_name="corp.example", allow_cidr=["192.168.1.0/24"])
+        with mock.patch.object(companyctl, "apply_lan_http") as apply, mock.patch("sys.stdout", new_callable=io.StringIO):
+            companyctl.web_http(args)
+            apply.assert_not_called()
+        args.acknowledge_plaintext = False
+        with self.assertRaisesRegex(companyctl.CompanyCtlError, "plaintext"):
+            companyctl.web_http(args)
+
+    def test_nginx_hidden_listeners_are_rejected(self):
+        path = Path("/etc/nginx/conf.d/other.conf")
+        for source in ("server { listen 0.0.0.0:80; }", "stream { server { listen 8080; } }"):
+            with self.assertRaisesRegex(companyctl.CompanyCtlError, "unmanaged nginx listener"):
+                companyctl.check_nginx_listener_scope(f"# configuration file {path}:\n{source}\n", set())
+        companyctl.check_nginx_listener_scope(f"# configuration file {path}:\nmap $http_upgrade $connection_upgrade {{ default upgrade; }}\n", set())
+        companyctl.check_nginx_listener_scope(f"# configuration file {path}:\nserver {{ listen 443; }}\n", {path})
+
+    def test_verify_never_certifies_a_self_computed_hash(self):
+        cfg = {"database": {"dbname": "test"}, "company_egress": {"managed_proxies": [{"class": "CN_DIRECT", "proxy_id": 4, "expected_exit_ipv4": "8.8.8.8"}]}}
+        with mock.patch.object(companyctl, "load_config", return_value=cfg), mock.patch.object(companyctl, "psql", return_value="13001"), mock.patch.object(companyctl.os, "execv") as execute, mock.patch("sys.stdout", new_callable=io.StringIO):
+            companyctl.verify()
+            self.assertNotIn("--sha256", execute.call_args.args[1])
+            companyctl.verify("A" * 64)
+            self.assertEqual(execute.call_args.args[1][-2:], ["--sha256", "a" * 64])
+            with self.assertRaises(companyctl.CompanyCtlError):
+                companyctl.verify("not-a-release-hash")
+
+    def test_fresh_http_failure_does_not_roll_back_valid_database(self):
+        source = (ROOT / "deploy/company-install-fresh.sh").read_text()
+        self.assertIn('--env "$env_file" --defer-http', source)
+        self.assertLess(source.index("fresh_complete=1"), source.index("if ! /usr/local/sbin/companyctl web http"))
+        self.assertIn("COMPANY_APPLICATION_READY_HTTP_FAILED=1", source)
+        self.assertIn("COMPANY_APPLICATION_READY_HTTP_FAILED=1", (ROOT / "deploy/company-activate-egress.sh").read_text())
+
+    @staticmethod
+    def fake_web_command(*args, check=True):
+        stdout = ""
+        if args[:2] == ("ip", "-j"):
+            stdout = json.dumps([{"addr_info": [{"local": "192.168.1.175"}]}])
+        elif args[:2] == ("systemctl", "is-enabled"):
+            stdout = "disabled\n"
+        elif args == ("nginx", "-T"):
+            stdout = "# configuration file /etc/nginx/nginx.conf:\nevents{}\nhttp{}\n"
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+    @unittest.skipIf(os.name == "nt", "filesystem transaction requires Unix symlinks")
+    def test_lan_http_apply_and_repeat_are_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nginx = root / "nginx"
+            (nginx / "sites-available").mkdir(parents=True)
+            (nginx / "sites-enabled").mkdir()
+            (nginx / "sites-available/default").write_text("default")
+            (nginx / "sites-enabled/default").symlink_to(nginx / "sites-available/default")
+            with mock.patch.object(companyctl, "web_command", side_effect=self.fake_web_command) as commands, mock.patch("sys.stdout", new_callable=io.StringIO):
+                for _ in range(2):
+                    companyctl.apply_lan_http("192.168.1.175", "corp.example", ["192.168.1.0/24"], disable_default=True, nginx_dir=nginx, backup_root=root / "backups")
+                self.assertFalse((nginx / "sites-enabled/default").is_symlink())
+                self.assertTrue((nginx / "sites-enabled/sub2api-company").is_symlink())
+                self.assertIn(companyctl.HTTP_SITE_MARKER, (nginx / "sites-available/sub2api-company").read_text())
+                self.assertTrue(all("sub2api.service" not in call.args for call in commands.call_args_list))
+
+    @unittest.skipIf(os.name == "nt", "filesystem transaction requires Unix symlinks")
+    def test_lan_http_failure_restores_manual_site_and_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nginx = root / "nginx"
+            (nginx / "sites-available").mkdir(parents=True)
+            (nginx / "sites-enabled").mkdir()
+            site = nginx / "sites-available/sub2api-company"
+            site.write_text("previous HTTPS config")
+            site.chmod(0o600)
+            link = nginx / "sites-enabled/sub2api-company"
+            link.symlink_to(site)
+            def fail_probe(*args, check=True):
+                if args[0] == "curl" and args[-1] == "http://corp.example/health":
+                    raise subprocess.CalledProcessError(22, args)
+                return self.fake_web_command(*args, check=check)
+            with mock.patch.object(companyctl, "web_command", side_effect=fail_probe) as commands:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    companyctl.apply_lan_http("192.168.1.175", "corp.example", ["192.168.1.0/24"], replace_existing=True, nginx_dir=nginx, backup_root=root / "backups")
+                self.assertEqual(site.read_text(), "previous HTTPS config")
+                self.assertEqual(site.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(link.resolve(), site.resolve())
+                self.assertIn(mock.call("systemctl", "restart", "nginx.service"), commands.call_args_list)
+
     def test_hex_pin_is_converted_to_base64(self):
         raw = "00" * 32
         self.assertEqual(
