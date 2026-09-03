@@ -59,6 +59,21 @@ done
 [[ $COMPANY_CN_SOCKS_PORT =~ ^[1-9][0-9]*$ ]] || die "invalid CN SOCKS port"
 [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 || $COMPANY_ENABLE_PUBLIC_TLS == 1 ]] ||
   die "COMPANY_ENABLE_PUBLIC_TLS must be 0 or 1"
+[[ ${COMPANY_WEB_MODE:-preserve} == preserve || ${COMPANY_WEB_MODE:-} == http || ${COMPANY_WEB_MODE:-} == public-https ]] || die "invalid COMPANY_WEB_MODE"
+if [[ ${COMPANY_WEB_MODE:-} == preserve ]]; then
+  [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 ]] || die "preserve mode requires COMPANY_ENABLE_PUBLIC_TLS=0"
+elif [[ ${COMPANY_WEB_MODE:-} == public-https ]]; then
+  [[ $COMPANY_ENABLE_PUBLIC_TLS == 1 ]] || die "public-https requires COMPANY_ENABLE_PUBLIC_TLS=1"
+fi
+if [[ ${COMPANY_WEB_MODE:-} == http ]]; then
+  [[ $COMPANY_ENABLE_PUBLIC_TLS == 0 && ${COMPANY_HTTP_ACKNOWLEDGE_PLAINTEXT:-0} == 1 ]] || die "HTTP mode requires explicit plaintext acknowledgement and public TLS disabled"
+  [[ -n ${COMPANY_WEB_LISTEN_IP:-} && -n ${COMPANY_WEB_ALLOW_CIDRS:-} ]] || die "HTTP listen IP and approved CIDRs are required"
+  [[ ! -e /etc/nginx/sites-available/sub2api-company && ! -L /etc/nginx/sites-available/sub2api-company && ! -e /etc/nginx/sites-enabled/sub2api-company && ! -L /etc/nginx/sites-enabled/sub2api-company ]] || die "existing Company nginx site: use web http separately, not fresh install"
+  web_http_args=(--listen-ip "$COMPANY_WEB_LISTEN_IP" --server-name "$COMPANY_DOMAIN" --acknowledge-plaintext)
+  IFS=',' read -r -a web_cidrs <<<"$COMPANY_WEB_ALLOW_CIDRS"
+  for web_cidr in "${web_cidrs[@]}"; do web_http_args+=(--allow-cidr "$web_cidr"); done
+  python3 "$script_dir/companyctl.py" web http "${web_http_args[@]}" --check >/dev/null
+fi
 python3 - "$COMPANY_CN_EXIT_IPV4" "$COMPANY_CN_DNS_IPV4_1" "$COMPANY_CN_DNS_IPV4_2" <<'PY'
 import ipaddress, sys
 exit_address = ipaddress.ip_address(sys.argv[1])
@@ -211,11 +226,20 @@ install -o root -g root -m 0755 "$script_dir/company-route-apply.sh"   /usr/loca
 install -o root -g root -m 0755 "$script_dir/company-install-fresh.sh"   /usr/local/sbin/company-install-fresh
 install -o root -g root -m 0755 "$script_dir/companyctl.py"   /usr/local/sbin/companyctl
 
-/usr/local/sbin/company-activate-egress --env "$env_file"
+/usr/local/sbin/company-activate-egress --env "$env_file" --defer-http
 
 /usr/local/sbin/company-verify-egress   --sha256 "$binary_sha"   --cn-socks-port "$COMPANY_CN_SOCKS_PORT"   --cn-exit-ip "$COMPANY_CN_EXIT_IPV4"
 
 fresh_complete=1
 trap - ERR INT TERM
+if [[ ${COMPANY_WEB_MODE:-} == http ]]; then
+  # HTTP is a separate final transaction: failure restores nginx but must not
+  # delete the now-verified application/database. Retrying web http is enough.
+  if ! /usr/local/sbin/companyctl web http "${web_http_args[@]}" --disable-default-site; then
+    echo "COMPANY_APPLICATION_READY_HTTP_FAILED=1" >&2
+    echo "Do not rerun fresh install; correct the web parameters and run companyctl web http." >&2
+    exit 1
+  fi
+fi
 echo "COMPANY_FRESH_INSTALL_READY=1"
 echo "Next: add each US/SG/JP/KR/HK/TW fixed-exit route with company-route-add."
