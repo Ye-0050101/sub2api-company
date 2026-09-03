@@ -90,6 +90,20 @@
     </footer>
   </div>
 
+  <!-- Company presentation only; custom/compact preferences keep precedence. -->
+  <CompanyHome
+    v-else-if="isCompanyVersion(siteVersion)"
+    :site-name="siteName"
+    :site-logo="siteLogo"
+    :site-subtitle="siteSubtitle"
+    :doc-url="docUrl"
+    :version="siteVersion"
+    :is-authenticated="isAuthenticated"
+    :dashboard-path="dashboardPath"
+    :is-dark="isDark"
+    @toggle-theme="toggleTheme"
+  />
+
   <!-- Default Home Page -->
   <div
     v-else
@@ -501,6 +515,8 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
+import CompanyHome from '@/components/home/CompanyHome.vue'
+import { isCompanyVersion } from '@/utils/companyBuild'
 
 const { t } = useI18n()
 
@@ -515,6 +531,7 @@ const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
 const compactHomeEnabled = computed(() => appStore.cachedPublicSettings?.compact_home_enabled === true)
+const siteVersion = computed(() => appStore.cachedPublicSettings?.version || appStore.siteVersion || '')
 const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 
 // Check if homeContent is a URL (for iframe display)
