@@ -324,6 +324,17 @@ REQUIRED_SOURCE = {
         "merge-base --is-ancestor",
         "ubuntu22_binary_sha256",
     ),
+    "tools/company-server-deploy.ps1": (
+        "latest.json",
+        "Binary SHA256 does not match latest.json",
+        "company-ops contains missing or unexpected files",
+        "Invoke-Checked scp",
+        "Invoke-Checked ssh",
+        "COMPANY_SERVER_PRECHECK_PASS",
+        "--ops-sha256",
+        "companyctl verify --sha256",
+        "COMPANY_SERVER_DEPLOY_READY",
+    ),
     "backend/cmd/server/main.go": (
         '"company-bootstrap-fresh"',
         'strings.TrimSpace(BuildType), "company"',
