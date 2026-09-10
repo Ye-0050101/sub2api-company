@@ -219,6 +219,13 @@ func validateCompanyExitEvidence(policy service.ManagedProxyPolicy, evidence com
 	if evidence.countryCode != policy.CountryCode {
 		return service.ManagedProxyHealthUnhealthy, fmt.Errorf("exit country mismatch")
 	}
+	// CN_DIRECT uses the server's IT-controlled public NAT. Its address may
+	// change, so the configured expected_exit_ipv4 is intentionally ignored.
+	// The two probes still must agree on one public IPv4 and report CN, so a
+	// wrong route remains fail-closed.
+	if policy.Class == service.ManagedProxyClassCNDirect {
+		return service.ManagedProxyHealthReadyPrimary, nil
+	}
 	switch evidence.ipA {
 	case policy.ExpectedExitIPv4:
 		return service.ManagedProxyHealthReadyPrimary, nil

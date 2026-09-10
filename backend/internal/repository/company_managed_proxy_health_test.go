@@ -103,6 +103,35 @@ func TestCompanyManagedProxyHealthClassifiesPrimaryAndDisaster(t *testing.T) {
 	require.Equal(t, service.ManagedProxyHealthReadyDisaster, state)
 }
 
+func TestCompanyManagedProxyHealthAllowsDynamicCNExit(t *testing.T) {
+	policies, err := service.NewManagedProxyPolicies(&config.Config{
+		CompanyEgress: config.CompanyEgressConfig{
+			ManagedProxies: []config.CompanyManagedProxyConfig{{
+				ProxyID:     7,
+				Class:       service.ManagedProxyClassCNDirect,
+				CountryCode: "CN",
+			}},
+		},
+	})
+	require.NoError(t, err)
+	policy := policies.Entries()[0]
+	policy.ExpectedExitIPv4 = "113.90.239.181"
+	state, err := validateCompanyExitEvidence(policy, companyExitEvidence{
+		ipA:         "113.90.237.13",
+		ipB:         "113.90.237.13",
+		countryCode: "CN",
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.ManagedProxyHealthReadyPrimary, state)
+
+	_, err = validateCompanyExitEvidence(policy, companyExitEvidence{
+		ipA:         "113.90.237.13",
+		ipB:         "113.90.239.181",
+		countryCode: "CN",
+	})
+	require.ErrorContains(t, err, "probe IP disagreement")
+}
+
 func TestCompanyManagedProxyHealthReturnsCachedDisasterState(t *testing.T) {
 	health, policy, proxy, fingerprint := companyHealthFixture(t)
 	key := managedProxyHealthKey{proxyID: policy.ProxyID, fingerprint: fingerprint}

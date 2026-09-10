@@ -199,7 +199,7 @@ sudo stat -c '%U:%G %a %n' /root/company-server.env
 
 ~~~ini
 COMPANY_DOMAIN=hsaiapi.internal
-COMPANY_CN_EXIT_IPV4=<服务器固定中国公网IPv4>
+COMPANY_CN_EXIT_IPV4=<可选；公网NAT可能变化时留空>
 COMPANY_CN_DNS_IPV4_1=<批准DNS1>
 COMPANY_CN_DNS_IPV4_2=<批准DNS2>
 COMPANY_DATABASE_NAME=<数据库名>
@@ -405,7 +405,10 @@ CN guard：
 - 允许 IPv4 TCP/443；
 - 其余拒绝。
 
-CN 出口健康证据要求 `api-ipv4.ip.sb` 与 Cloudflare trace 返回同一固定 IPv4，且 Cloudflare `loc=CN`。更换公司出口 NAT、公网 IPv4或 DNS 后，必须先更新 root-only env/policy/guard 并重新验证，不能只改数据库 Proxy 地址。
+CN 出口健康证据要求 `api-ipv4.ip.sb` 与 Cloudflare trace 返回同一公网 IPv4，且
+Cloudflare `loc=CN`。CN_DIRECT 不再把单个公网 IPv4 作为永久配置；公网 NAT
+变化不会单独导致阻断，但两个探针不一致或国家不是 CN 时仍失败关闭。`COMPANY_CN_EXIT_IPV4`
+仅为兼容旧配置而保留，可留空。
 
 ## 8. 使用 companyctl 增加国际 Route
 

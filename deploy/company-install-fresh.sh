@@ -41,9 +41,10 @@ done
 
 set -a
 # shellcheck disable=SC1090
+COMPANY_CN_EXIT_IPV4=""
 source "$env_file"
 set +a
-for name in COMPANY_DOMAIN COMPANY_CN_EXIT_IPV4 COMPANY_CN_DNS_IPV4_1   COMPANY_CN_DNS_IPV4_2 COMPANY_DATABASE_NAME COMPANY_DATABASE_USER   COMPANY_DATABASE_PASSWORD COMPANY_ADMIN_EMAIL COMPANY_ADMIN_PASSWORD   COMPANY_CN_PROXY_ID COMPANY_CN_SOCKS_PORT COMPANY_ENABLE_PUBLIC_TLS
+for name in COMPANY_DOMAIN COMPANY_CN_DNS_IPV4_1   COMPANY_CN_DNS_IPV4_2 COMPANY_DATABASE_NAME COMPANY_DATABASE_USER   COMPANY_DATABASE_PASSWORD COMPANY_ADMIN_EMAIL COMPANY_ADMIN_PASSWORD   COMPANY_CN_PROXY_ID COMPANY_CN_SOCKS_PORT COMPANY_ENABLE_PUBLIC_TLS
 do
   require_var "$name"
 done
@@ -76,13 +77,14 @@ if [[ ${COMPANY_WEB_MODE:-} == http ]]; then
 fi
 python3 - "$COMPANY_CN_EXIT_IPV4" "$COMPANY_CN_DNS_IPV4_1" "$COMPANY_CN_DNS_IPV4_2" <<'PY'
 import ipaddress, sys
-exit_address = ipaddress.ip_address(sys.argv[1])
-if (
-    exit_address.version != 4
-    or str(exit_address) != sys.argv[1]
-    or not exit_address.is_global
-):
-    raise SystemExit("COMPANY_CN_EXIT_IPV4 must be a canonical public IPv4")
+if sys.argv[1]:
+    exit_address = ipaddress.ip_address(sys.argv[1])
+    if (
+        exit_address.version != 4
+        or str(exit_address) != sys.argv[1]
+        or not exit_address.is_global
+    ):
+        raise SystemExit("COMPANY_CN_EXIT_IPV4 must be a canonical public IPv4 when set")
 for value in sys.argv[2:]:
     address = ipaddress.ip_address(value)
     if address.version != 4 or str(address) != value:
@@ -207,12 +209,14 @@ from pathlib import Path
 import sys, yaml
 path = Path("/opt/sub2api/config.yaml")
 cfg = yaml.safe_load(path.read_text()) or {}
-cfg["company_egress"]["managed_proxies"] = [{
+entry = {
     "proxy_id": int(sys.argv[1]),
     "class": "CN_DIRECT",
     "country_code": "CN",
-    "expected_exit_ipv4": sys.argv[2],
-}]
+}
+if sys.argv[2]:
+    entry["expected_exit_ipv4"] = sys.argv[2]
+cfg["company_egress"]["managed_proxies"] = [entry]
 path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
 PY
 chown sub2api:sub2api /opt/sub2api/config.yaml
@@ -228,7 +232,7 @@ install -o root -g root -m 0755 "$script_dir/companyctl.py"   /usr/local/sbin/co
 
 /usr/local/sbin/company-activate-egress --env "$env_file" --defer-http
 
-/usr/local/sbin/company-verify-egress   --sha256 "$binary_sha"   --cn-socks-port "$COMPANY_CN_SOCKS_PORT"   --cn-exit-ip "$COMPANY_CN_EXIT_IPV4"
+/usr/local/sbin/company-verify-egress --sha256 "$binary_sha" --cn-socks-port "$COMPANY_CN_SOCKS_PORT"
 
 fresh_complete=1
 trap - ERR INT TERM

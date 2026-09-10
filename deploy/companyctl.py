@@ -564,7 +564,7 @@ def verify(expected_sha: str = "") -> None:
     cn_port = checked_port(port_value, "CN SOCKS port")
     if expected_sha and not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha):
         raise CompanyCtlError("expected SHA256 must contain 64 hexadecimal characters")
-    arguments = ["company-verify-egress", "--cn-socks-port", str(cn_port), "--cn-exit-ip", str(cn["expected_exit_ipv4"])]
+    arguments = ["company-verify-egress", "--cn-socks-port", str(cn_port)]
     if expected_sha:
         arguments.extend(["--sha256", expected_sha.lower()])
     else:

@@ -32,7 +32,7 @@
   - EgressResolver 与现有 OAuth session.ProxyURL 绑定，不修改上游 session DTO
 - `backend/internal/repository/company_managed_proxy_health.go`
   - startup/periodic/on-demand health
-  - 双 HTTPS evidence、主/灾备固定出口 IP、country、TTL、fingerprint
+  - 双 HTTPS evidence、国际线路主/灾备固定出口 IP、CN 动态出口 country、TTL、fingerprint
   - INTERNATIONAL 使用 ipify Probe A；CN_DIRECT 使用编译期 IP.SB Probe A；二者共享 Cloudflare Probe B，禁止运行时 fallback
   - runtime 状态：READY_PRIMARY / READY_DISASTER / UNHEALTHY
 - `backend/internal/repository/company_http_upstream.go`

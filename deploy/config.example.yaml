@@ -117,10 +117,10 @@ cors:
 # Company Egress V1（仅公司分支）
 # =============================================================================
 # Release mode requires at least one managed proxy. Keep this template
-# commented until the existing database Proxy IDs and fixed exit IPv4 values
+# commented until the existing database Proxy IDs and exit policies
 # have been verified in the deployment environment.
 # release 模式必须配置至少一个受管 Proxy。请先在部署环境核验现有 Proxy ID
-# 和固定出口 IPv4，再取消注释；不要在此使用订阅节点密码或代理凭据。
+# 和出口策略，再取消注释；不要在此使用订阅节点密码或代理凭据。
 # company_egress:
 #   development_bypass: false
 #   managed_proxies:
@@ -133,7 +133,7 @@ cors:
 #     - proxy_id: <CN_PROXY_ID>
 #       class: "CN_DIRECT"
 #       country_code: "CN"
-#       expected_exit_ipv4: "<CN_FIXED_PUBLIC_IPV4>"
+#       # CN 公网 NAT 由 IT 控制且可能变化；可省略 expected_exit_ipv4。
 
 # =============================================================================
 # Security Configuration

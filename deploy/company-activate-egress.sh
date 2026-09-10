@@ -20,10 +20,11 @@ die() { echo "Refusing: $*" >&2; exit 1; }
 [[ $(stat -c %U:%G "$env_file") == root:root && $(stat -c %a "$env_file") == 600 ]] || die "env must be root:root 0600"
 set -a
 # shellcheck disable=SC1090
+COMPANY_CN_EXIT_IPV4=""
 source "$env_file"
 set +a
 
-for name in COMPANY_DOMAIN COMPANY_CN_EXIT_IPV4 COMPANY_CN_DNS_IPV4_1 \
+for name in COMPANY_DOMAIN COMPANY_CN_DNS_IPV4_1 \
   COMPANY_CN_DNS_IPV4_2 COMPANY_DATABASE_NAME COMPANY_CN_PROXY_ID \
   COMPANY_CN_SOCKS_PORT COMPANY_ENABLE_PUBLIC_TLS
 do
@@ -391,7 +392,7 @@ fi
 
 echo "COMPANY_EGRESS_ACTIVATED=1"
 if [[ $migration_us -eq 1 ]]; then
-  echo "Verify with: company-verify-egress --us-socks-port $COMPANY_US_SOCKS_PORT --us-exit-ip $COMPANY_US_EXIT_IPV4 --cn-socks-port $COMPANY_CN_SOCKS_PORT --cn-exit-ip $COMPANY_CN_EXIT_IPV4 --domain $COMPANY_DOMAIN"
+  echo "Verify with: company-verify-egress --us-socks-port $COMPANY_US_SOCKS_PORT --us-exit-ip $COMPANY_US_EXIT_IPV4 --cn-socks-port $COMPANY_CN_SOCKS_PORT --domain $COMPANY_DOMAIN"
 else
-  echo "Verify with: company-verify-egress --cn-socks-port $COMPANY_CN_SOCKS_PORT --cn-exit-ip $COMPANY_CN_EXIT_IPV4"
+  echo "Verify with: company-verify-egress --cn-socks-port $COMPANY_CN_SOCKS_PORT"
 fi

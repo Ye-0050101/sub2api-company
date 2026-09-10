@@ -73,6 +73,7 @@ class CompanyCtlTest(unittest.TestCase):
         with mock.patch.object(companyctl, "load_config", return_value=cfg), mock.patch.object(companyctl, "psql", return_value="13001"), mock.patch.object(companyctl.os, "execv") as execute, mock.patch("sys.stdout", new_callable=io.StringIO):
             companyctl.verify()
             self.assertNotIn("--sha256", execute.call_args.args[1])
+            self.assertNotIn("--cn-exit-ip", execute.call_args.args[1])
             companyctl.verify("A" * 64)
             self.assertEqual(execute.call_args.args[1][-2:], ["--sha256", "a" * 64])
             with self.assertRaises(companyctl.CompanyCtlError):
