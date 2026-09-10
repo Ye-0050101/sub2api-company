@@ -45,7 +45,8 @@ company_egress:
       disaster_exit_ipv4: <OPTIONAL_DISASTER_FIXED_PUBLIC_IPV4>
 ```
 
-配置只引用现有 `Proxy.ID`。环境相关的 ID 和固定出口 IPv4 不写入源码。
+配置只引用现有 `Proxy.ID`。国际线路使用固定出口 IPv4；CN_DIRECT 的
+`expected_exit_ipv4` 可省略，因为服务器公网 NAT 由 IT 控制且可能变化。
 
 生产不允许普通 runtime switch 关闭 enforcement 后继续服务。开发/测试可显式使用 `development_bypass`；release 模式使用该开关必须启动失败。
 
@@ -141,7 +142,8 @@ RouteHealth 是 runtime 状态，不新增数据库字段：
 - `CN_DIRECT` Probe A：`https://api-ipv4.ip.sb/ip`，plain-text IPv4 evidence
 - 所有 class 的 Probe B：`https://cloudflare.com/cdn-cgi/trace`，提供 IPv4 和 `loc`
 
-CN 专用 Probe A 是因最终中国服务器无法连接 ipify，而 IP.SB 与 Cloudflare 均实测返回相同固定 IPv4 `47.107.65.183`、Cloudflare `loc=CN`。这不是运行时 fallback；每个 class 只有一个编译期 Probe A。
+CN 专用 Probe A 是因最终中国服务器无法连接 ipify。两个探针必须返回同一
+公网 IPv4，且 Cloudflare `loc=CN`；CN_DIRECT 不把某个公网 IPv4 固化为永久值。
 
 约束：
 
@@ -167,7 +169,11 @@ A.IP == optional disaster_exit_ipv4
   -> READY_DISASTER
 ```
 
-`disaster_exit_ipv4` 最多一个、可省略、必须是与主 IP 不同的 canonical public IPv4。主/灾备实际出口都必须由 Cloudflare `loc` 验证为同一 `country_code`。任何第三个 IP、TLS failure、redirect、parse failure、IPv6、私网/保留地址、missing loc、IP disagreement、country mismatch、Proxy 变化或 health TTL 过期均为 UNHEALTHY/FAIL CLOSED。
+对于 `INTERNATIONAL_PROXY`，上面的固定主/灾备 IP 条件仍然适用。对于
+`CN_DIRECT`，只要求 `A.IP == B.IP` 且 `B.loc == CN`，不比较
+`expected_exit_ipv4`。任何 TLS failure、redirect、parse failure、IPv6、
+私网/保留地址、missing loc、IP disagreement、country mismatch、Proxy 变化
+或 health TTL 过期仍为 UNHEALTHY/FAIL CLOSED。
 
 协议与灾备自动化由本地 sing-box selector/controller 完成：同一主 IP 内严格按 `AnyTLS -> HY2 -> TUIC`；三者连续失败至少 180 秒才允许切到灾备 AnyTLS。灾备失败选择 BLOCK；主 IP 连续恢复至少 180 秒后自动回切。Sub2API fallback 始终保持 `none`。
 

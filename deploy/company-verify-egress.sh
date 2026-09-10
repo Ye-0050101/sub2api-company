@@ -38,7 +38,9 @@ probe_exit() {
   ip_b=$(awk -F= '$1=="ip"{print $2}' <<<"$trace")
   country=$(awk -F= '$1=="loc"{print $2}' <<<"$trace")
   echo "INFO $label probe_a=$ip_a probe_b=$ip_b country=$country"
-  [[ $ip_a == "$expected_ip" && $ip_b == "$expected_ip" && $country == "$expected_country" ]]
+  [[ ( -z $expected_ip || $ip_a == "$expected_ip" ) &&
+     ( -z $expected_ip || $ip_b == "$expected_ip" ) &&
+     $country == "$expected_country" ]]
 }
 
 probe_managed_route() {
@@ -124,10 +126,10 @@ if [[ -n $us_socks_port || -n $us_exit_ip ]]; then
 fi
 
 if [[ -n $cn_socks_port || -n $cn_exit_ip ]]; then
-  check "CN probe arguments complete" test -n "$cn_socks_port" -a -n "$cn_exit_ip"
+  check "CN probe arguments complete" test -n "$cn_socks_port"
   check "CN egress service" systemctl is-active --quiet sub2api-egress-cn.service
-  check "CN fixed exit" probe_exit CN "$cn_socks_port" \
-    'https://api-ipv4.ip.sb/ip' "$cn_exit_ip" CN
+  check "CN exit" probe_exit CN "$cn_socks_port" \
+    'https://api-ipv4.ip.sb/ip' "" CN
 fi
 
 if [[ -n $public_domain ]]; then

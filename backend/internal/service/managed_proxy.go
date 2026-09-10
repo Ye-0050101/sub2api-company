@@ -161,12 +161,21 @@ func normalizeManagedProxyPolicy(raw config.CompanyManagedProxyConfig) (ManagedP
 	default:
 		return ManagedProxyPolicy{}, fmt.Errorf("%w: unsupported class %q", ErrManagedEgressPolicy, policy.Class)
 	}
-	canonicalIP, err := CanonicalPublicIPv4(policy.ExpectedExitIPv4)
-	if err != nil {
-		return ManagedProxyPolicy{}, fmt.Errorf("%w: expected_exit_ipv4 must be a canonical public IPv4", ErrManagedEgressPolicy)
+	if policy.ExpectedExitIPv4 == "" {
+		if policy.Class != ManagedProxyClassCNDirect {
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: expected_exit_ipv4 is required for international proxies", ErrManagedEgressPolicy)
+		}
+	} else {
+		canonicalIP, err := CanonicalPublicIPv4(policy.ExpectedExitIPv4)
+		if err != nil {
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: expected_exit_ipv4 must be a canonical public IPv4", ErrManagedEgressPolicy)
+		}
+		policy.ExpectedExitIPv4 = canonicalIP
 	}
-	policy.ExpectedExitIPv4 = canonicalIP
 	if policy.DisasterExitIPv4 != "" {
+		if policy.ExpectedExitIPv4 == "" {
+			return ManagedProxyPolicy{}, fmt.Errorf("%w: disaster_exit_ipv4 requires expected_exit_ipv4", ErrManagedEgressPolicy)
+		}
 		disasterIP, disasterErr := CanonicalPublicIPv4(policy.DisasterExitIPv4)
 		if disasterErr != nil {
 			return ManagedProxyPolicy{}, fmt.Errorf("%w: disaster_exit_ipv4 must be a canonical public IPv4", ErrManagedEgressPolicy)

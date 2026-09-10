@@ -40,11 +40,12 @@ done
 
 set -a
 # shellcheck disable=SC1090
+COMPANY_CN_EXIT_IPV4=""
 source "$env_file"
 set +a
 
 for name in \
-  COMPANY_DOMAIN COMPANY_CN_EXIT_IPV4 COMPANY_CN_DNS_IPV4_1 COMPANY_CN_DNS_IPV4_2 \
+  COMPANY_DOMAIN COMPANY_CN_DNS_IPV4_1 COMPANY_CN_DNS_IPV4_2 \
   COMPANY_US_EXIT_IPV4 COMPANY_US_NODE_IPV4 COMPANY_US_ANYTLS_PORT \
   COMPANY_US_HY2_PORT COMPANY_US_TUIC_PORT COMPANY_DATABASE_NAME \
   COMPANY_DATABASE_USER COMPANY_US_PROXY_ID COMPANY_CN_PROXY_ID \
@@ -60,7 +61,10 @@ done
 python3 - "$COMPANY_CN_EXIT_IPV4" "$COMPANY_CN_DNS_IPV4_1" "$COMPANY_CN_DNS_IPV4_2" \
   "$COMPANY_US_EXIT_IPV4" "$COMPANY_US_NODE_IPV4" <<'PY'
 import ipaddress, sys
-for value in sys.argv[1:]:
+values = sys.argv[1:]
+if values and not values[0]:
+    values = values[1:]
+for value in values:
     address = ipaddress.ip_address(value)
     if address.version != 4:
         raise SystemExit(f"not IPv4: {value}")
@@ -165,8 +169,10 @@ managed[:] = [x for x in managed if int(x.get('proxy_id', 0)) not in (us_id, cn_
               and x.get('class') != 'CN_DIRECT']
 managed.append({'proxy_id': us_id, 'class': 'INTERNATIONAL_PROXY', 'country_code': 'US',
                 'expected_exit_ipv4': os.environ['COMPANY_US_EXIT_IPV4']})
-managed.append({'proxy_id': cn_id, 'class': 'CN_DIRECT', 'country_code': 'CN',
-                'expected_exit_ipv4': os.environ['COMPANY_CN_EXIT_IPV4']})
+cn_entry = {'proxy_id': cn_id, 'class': 'CN_DIRECT', 'country_code': 'CN'}
+if os.environ.get('COMPANY_CN_EXIT_IPV4'):
+    cn_entry['expected_exit_ipv4'] = os.environ['COMPANY_CN_EXIT_IPV4']
+managed.append(cn_entry)
 cfg['company_egress']['development_bypass'] = False
 cfg.setdefault('security', {}).setdefault('proxy_fallback', {})['allow_direct_on_error'] = False
 p.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
