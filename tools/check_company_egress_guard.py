@@ -319,8 +319,11 @@ REQUIRED_SOURCE = {
         "Invoke-Checked scp",
         "Invoke-Checked ssh",
         "COMPANY_SERVER_PRECHECK_PASS",
+        "minimum_stage_space",
+        "([string][char]13 + [char]10)",
         "--ops-sha256",
         "companyctl verify --sha256",
+        "COMPANY_SERVER_STAGE_CLEANED",
         "COMPANY_SERVER_DEPLOY_READY",
     ),
     "backend/cmd/server/main.go": (
