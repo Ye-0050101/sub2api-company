@@ -6,6 +6,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/home/__tests__/CompanyHome.styles.spec.ts \
 	src/views/__tests__/HomeView.company.spec.ts \
 	src/views/__tests__/HomeView.compact.spec.ts \
+	src/i18n/__tests__/localeKeyCompleteness.spec.ts \
 	src/api/__tests__/client.spec.ts \
 	src/api/__tests__/tokenRefresh.spec.ts \
 	src/api/__tests__/channelMonitorV2.spec.ts \
