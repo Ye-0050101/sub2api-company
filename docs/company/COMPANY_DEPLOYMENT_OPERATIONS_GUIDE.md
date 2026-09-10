@@ -683,6 +683,8 @@ sudo find /var/backups/sub2api -maxdepth 1 -type f \
 
 参数 -Deploy 是必需的显式生产变更确认；没有它，脚本只会拒绝，不会上传或连接服务器。服务器不需要 GitHub 凭据，也不需要源码或构建工具。脚本不会自动恢复数据库；新 binary 可能已经执行 migration 时，仍遵守本节后述的人工数据库回滚边界。若未配置 SSH key，scp 和 ssh 可能分别要求一次服务器密码。
 
+脚本在解压前检查 staging 文件系统可用空间；无足够空间时停止。上传 ZIP 始终作为临时文件清理，成功部署并通过最终 verify 后删除本次解压目录；失败时保留解压目录和日志用于排查。数据库 dump 与 /opt/sub2api/releases/rollback-* 不会静默删除，应至少保留当前版本的直接前一版及其匹配 dump，并由独立清理流程按容量策略处理。
+
 以下手工上传/部署命令保留为故障恢复方式。正常单服务器发布不需要先从 GitHub 再手工下载一次 artifact；应直接使用 company-update.ps1 已下载并记录在 latest.json 中的文件。
 
 始终直接执行本次上传 artifact 中的部署脚本，避免服务器上旧版

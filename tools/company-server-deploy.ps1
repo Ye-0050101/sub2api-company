@@ -172,6 +172,13 @@ trap 'exit 143' TERM
 sudo -v
 test -f "$archive"
 test "$(sha256sum "$archive" | awk '{print $1}')" = "$expected_archive_sha"
+archive_bytes=$(stat -c '%s' "$archive")
+stage_available_bytes=$(df --output=avail -B1 "$(dirname "$archive")" | tail -n 1 | tr -d ' ')
+minimum_stage_space=$((archive_bytes * 3 + 64 * 1024 * 1024))
+if [[ ! $stage_available_bytes =~ ^[0-9]+$ || $stage_available_bytes -lt $minimum_stage_space ]]; then
+  echo "Insufficient space for staging: available=$stage_available_bytes required=$minimum_stage_space" >&2
+  exit 1
+fi
 test ! -e "$release"
 install -d -m 0700 "$release"
 python3 -m zipfile -e "$archive" "$release"
@@ -217,7 +224,10 @@ if ! sudo companyctl verify --sha256 "$expected_binary_sha" >"$release/verify.lo
   exit 1
 fi
 echo 'COMPANY_SERVER_VERIFY_PASS'
-echo "COMPANY_SERVER_DEPLOY_READY release=$release"
+staged_release=$release
+rm -rf -- "$staged_release"
+echo "COMPANY_SERVER_STAGE_CLEANED=$staged_release"
+echo 'COMPANY_SERVER_DEPLOY_READY'
 '@
 
 $remoteScript = $remoteTemplate.Replace('__ARCHIVE__', $remoteArchive).
@@ -226,6 +236,7 @@ $remoteScript = $remoteTemplate.Replace('__ARCHIVE__', $remoteArchive).
     Replace('__BINARY_SHA__', $expectedBinarySha).
     Replace('__OPS_SHA__', $expectedOpsSha).
     Replace('__OS_VERSION__', $expectedOSVersion)
+$remoteScript = $remoteScript.Replace(([string][char]13 + [char]10), [string][char]10)
 $encodedScript = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
 $remoteCommand = "printf '%s' '$encodedScript' | base64 -d | bash"
 
