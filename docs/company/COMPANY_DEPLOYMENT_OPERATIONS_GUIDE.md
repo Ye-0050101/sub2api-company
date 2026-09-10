@@ -675,6 +675,16 @@ sudo find /var/backups/sub2api -maxdepth 1 -type f \
 
 ### 12.2 原子部署
 
+只有一台服务器时，推荐在已经运行 company-update.ps1 的 Windows 发布电脑上直接执行一条命令。它读取 dist/company/latest.json，选择对应系统的已验证 artifact，重新核对 binary、ops manifest 和五个工具，SCP 到服务器，验证服务器系统和当前出口，随后在维护窗口调用同一份 artifact 内的 company-deploy-egress，最后验证 binary SHA、账号绑定和全部出口：
+
+~~~powershell
+.\tools\company-server-deploy.ps1 -HostName 192.168.1.175 -UserName hsaiapi -Target ubuntu22 -Deploy
+~~~
+
+参数 -Deploy 是必需的显式生产变更确认；没有它，脚本只会拒绝，不会上传或连接服务器。服务器不需要 GitHub 凭据，也不需要源码或构建工具。脚本不会自动恢复数据库；新 binary 可能已经执行 migration 时，仍遵守本节后述的人工数据库回滚边界。若未配置 SSH key，scp 和 ssh 可能分别要求一次服务器密码。
+
+以下手工上传/部署命令保留为故障恢复方式。正常单服务器发布不需要先从 GitHub 再手工下载一次 artifact；应直接使用 company-update.ps1 已下载并记录在 latest.json 中的文件。
+
 始终直接执行本次上传 artifact 中的部署脚本，避免服务器上旧版
 `companyctl`/`company-deploy-egress` 跳过新增加的备份或安全门。脚本验证通过后会把同一
 artifact 内的新版 ops 原子安装到 `/usr/local/sbin`；后续也可使用 `companyctl deploy`，
