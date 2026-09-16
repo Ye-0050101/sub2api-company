@@ -86,6 +86,9 @@ expected = {
         {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
     ],
 }
+raise SystemExit(0 if actual == expected else 1)
+PY
+}
 
 verify_codex_update_proxy() {
   python3 - /opt/sub2api/config.yaml /etc/sub2api-egress/routes/us-a/metadata.json <<'PY'
@@ -107,9 +110,6 @@ port = int(route.get("socks_port") or 0)
 if route.get("route_key") != "us-a" or route.get("country_code") != "US" or not 1 <= port <= 65535:
     raise SystemExit(1)
 expected = f"socks5h://127.0.0.1:{port}"
-raise SystemExit(0 if actual == expected else 1)
-PY
-}
 raise SystemExit(0 if actual == expected else 1)
 PY
 }
