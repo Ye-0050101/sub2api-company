@@ -173,6 +173,9 @@ if os.environ.get('COMPANY_CN_EXIT_IPV4'):
     cn_entry['expected_exit_ipv4'] = os.environ['COMPANY_CN_EXIT_IPV4']
 managed.append(cn_entry)
 cfg['company_egress']['development_bypass'] = False
+cfg.setdefault('update', {})['proxy_url'] = (
+    f"socks5h://127.0.0.1:{int(os.environ['COMPANY_US_SOCKS_PORT'])}"
+)
 cfg.setdefault('security', {}).setdefault('proxy_fallback', {})['allow_direct_on_error'] = False
 p.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False))
 PY

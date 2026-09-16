@@ -235,6 +235,7 @@ rollback() {
 trap rollback ERR INT TERM
 
 python3 - /opt/sub2api/config.yaml <<'PY' || rollback
+import json
 import os
 from pathlib import Path
 import stat
@@ -254,6 +255,13 @@ security["proxy_probe"] = {
         {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
     ],
 }
+control_route = Path("/etc/sub2api-egress/routes/us-a/metadata.json")
+if control_route.is_file():
+    route = json.loads(control_route.read_text(encoding="utf-8"))
+    port = int(route.get("socks_port") or 0)
+    if route.get("route_key") != "us-a" or route.get("country_code") != "US" or not 1 <= port <= 65535:
+        raise SystemExit("invalid us-a control route metadata")
+    cfg.setdefault("update", {})["proxy_url"] = f"socks5h://127.0.0.1:{port}"
 temporary = None
 try:
     with tempfile.NamedTemporaryFile(

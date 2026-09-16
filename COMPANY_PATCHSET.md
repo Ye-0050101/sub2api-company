@@ -137,6 +137,10 @@
 已提供三个职责分离入口：
 
 - `tools/company-update.ps1`
+  - 更新开始前查询 `openai/codex` 官方 GitHub Releases：仅接受非 draft、非 prerelease 且严格匹配 `rust-vMAJOR.MINOR.PATCH` 的版本；`latest` 不合格时扫描最近 100 个 release 并按语义版本选最高
+  - 将确认过的 Codex 版本作为候选信息写入 `dist/company/latest.json`；只供管理员审核，不修改服务器或运行时手工版本设置
+  - Codex 候选查询失败时，在创建或推送升级分支前停止；不会把空值写成成功结果，也不会改动原有 `latest.json`
+  - 临时升级分支同时记录候选证据，CI 仅执行离线的版本格式、Codex 身份请求头和 `/v1/responses` 请求构造契约检查；不使用生产 OAuth 凭据，也不声称验证了真实上游可用性
   - 临时分支 merge upstream，不 rebase、不 force push
   - 先把临时升级分支推送到 GitHub；正式分支保持不变
   - 等待临时分支 GitHub CI、Security Scan 和 embedded-site artifact 全绿
@@ -160,6 +164,7 @@
 
 服务器运维脚本由静态门禁止访问 GitHub；中国服务器只接受经本机/GitHub Actions验证后通过SCP上传的artifact。
 bootstrap会把activate入口安装到 `/usr/local/sbin`，避免首次安装依赖当前工作目录。
+当受管 `us-a` Route 存在时，Company 配置把 `update.proxy_url` 收敛为该 Route 的本机 `socks5h` 入口；`security.proxy_fallback.allow_direct_on_error` 固定为 `false`。版本查询失败沿用已保存值，不回退公网直连，也不自动覆盖管理员手工版本。
 
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
