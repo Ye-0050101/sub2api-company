@@ -86,6 +86,30 @@ expected = {
         {"url": "https://cloudflare.com/cdn-cgi/trace", "parser": "chatgpt-trace"},
     ],
 }
+
+verify_codex_update_proxy() {
+  python3 - /opt/sub2api/config.yaml /etc/sub2api-egress/routes/us-a/metadata.json <<'PY'
+import json
+from pathlib import Path
+import sys
+import yaml
+
+cfg = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
+fallback = ((cfg.get("security") or {}).get("proxy_fallback") or {}).get("allow_direct_on_error")
+if fallback is not False:
+    raise SystemExit(1)
+actual = str((cfg.get("update") or {}).get("proxy_url") or "")
+route_path = Path(sys.argv[2])
+if not route_path.is_file():
+    raise SystemExit(0 if actual == "" else 1)
+route = json.loads(route_path.read_text(encoding="utf-8"))
+port = int(route.get("socks_port") or 0)
+if route.get("route_key") != "us-a" or route.get("country_code") != "US" or not 1 <= port <= 65535:
+    raise SystemExit(1)
+expected = f"socks5h://127.0.0.1:{port}"
+raise SystemExit(0 if actual == expected else 1)
+PY
+}
 raise SystemExit(0 if actual == expected else 1)
 PY
 }
@@ -102,6 +126,7 @@ check "service user" test "$(systemctl show sub2api.service -p User --value)" = 
 check "service group" test "$(systemctl show sub2api.service -p Group --value)" = "sub2api"
 check "binary exists" test -x /opt/sub2api/sub2api
 check "exact HTTPS proxy probe policy" verify_proxy_probe_config
+check "Codex update proxy fail-closed" verify_codex_update_proxy
 
 binary_sha=$(sha256sum /opt/sub2api/sub2api | awk '{print $1}')
 echo "INFO binary_sha256=$binary_sha"

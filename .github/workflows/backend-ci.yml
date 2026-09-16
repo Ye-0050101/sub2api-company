@@ -41,7 +41,12 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          foreach ($script in @('tools/company-update.ps1', 'tools/company-server-deploy.ps1')) {
+          foreach ($script in @(
+            'tools/company-codex-release.ps1',
+            'tools/company-codex-release-test.ps1',
+            'tools/company-update.ps1',
+            'tools/company-server-deploy.ps1'
+          )) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(
@@ -54,15 +59,43 @@ jobs:
               exit 1
             }
           }
+          ./tools/company-codex-release-test.ps1
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           check-latest: false
           cache: true
           cache-dependency-path: backend/go.sum
+      - name: Validate tracked Codex candidate
+        id: codex_candidate
+        shell: pwsh
+        run: |
+          $record = Get-Content -Raw -LiteralPath '.company/codex-candidate.json' | ConvertFrom-Json
+          $version = [string]$record.version
+          if ($record.schema_version -ne 1 -or $record.source_repository -ne 'openai/codex') {
+            throw 'Codex candidate provenance is invalid'
+          }
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Codex candidate version must be strict MAJOR.MINOR.PATCH'
+          }
+          if ($record.tag -ne "rust-v$version") {
+            throw 'Codex candidate tag does not match its version'
+          }
+          if ($record.url -ne "https://github.com/openai/codex/releases/tag/$($record.tag)") {
+            throw 'Codex candidate URL is not the matching official release URL'
+          }
+          if ([string]$record.upstream_commit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Codex candidate upstream commit is invalid'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Verify Go version
         run: |
           go version | grep -q 'go1.27.0'
+      - name: Codex candidate offline compatibility contract
+        working-directory: backend
+        env:
+          COMPANY_CODEX_CANDIDATE_VERSION: ${{ steps.codex_candidate.outputs.version }}
+        run: go test ./internal/service -run '^TestCompanyCodexCandidateOfflineContract$' -count=1
       - name: Company egress static guard
         run: python3 tools/check_company_egress_guard.py
       - name: Unit tests

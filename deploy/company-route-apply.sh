@@ -302,6 +302,12 @@ if route["disaster_exit_ipv4"]:
     entry["disaster_exit_ipv4"] = route["disaster_exit_ipv4"]
 managed.append(entry)
 managed.sort(key=lambda item: int(item["proxy_id"]))
+if route["route_key"] == "us-a":
+    if route["country_code"] != "US":
+        raise SystemExit("the us-a control route must use country US")
+    cfg.setdefault("update", {})["proxy_url"] = (
+        f"socks5h://127.0.0.1:{int(route['socks_port'])}"
+    )
 cfg.setdefault("security", {}).setdefault("proxy_fallback", {})[
     "allow_direct_on_error"
 ] = False
