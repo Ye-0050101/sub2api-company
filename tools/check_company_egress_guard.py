@@ -461,6 +461,10 @@ REQUIRED_SOURCE = {
     "backend/internal/service/openai_plugin_transport.go": (
         "!managedEgress",
     ),
+    "backend/internal/service/wire.go": (
+        "len(cfg.CompanyEgress.ManagedProxies) == 0",
+        "manager.SetAccountDirectory(gateway)",
+    ),
     "backend/internal/service/gateway_websearch_emulation.go": (
         "len(s.cfg.CompanyEgress.ManagedProxies) > 0",
     ),

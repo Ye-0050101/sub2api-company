@@ -2,7 +2,7 @@
 
 > 适用范围：Company Egress V1。本文以仓库现有脚本和代码为准，不把规划中的能力写成已经实现。
 >
-> 当前实现已跟进官方 Sub2API v0.2.0，并维护两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以 `dist/company/latest.json` 记录的提交和制品为准，不以本文中的示例值判断。
+> 当前实现已跟进官方 Sub2API v0.2.9，并维护两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以 `dist/company/latest.json` 记录的提交和制品为准，不以本文中的示例值判断。
 >
 > 本轮新增入口管理的说明基于本地代码；未进行服务器实机部署、备份恢复或回滚验收。以下命令和检查表是操作要求，不代表目标服务器已通过验收。
 
@@ -621,14 +621,14 @@ git status --short
 
 这就是工作站侧完整的官方更新命令。脚本会：
 
-1. fetch upstream 并验证目标继承冻结基线；
+1. fetch upstream，并验证目标是纳入 upstream/main 的正式稳定 tag 且继承冻结基线；
 2. 从 `company/egress-v1` 建第一条临时 `company/upgrade-*` 分支并合并官方提交；
 3. 扫描完整 production Go tree，运行 Company 静态门；
 4. 推送第一条临时分支并等待 Company CI 与 Security Scan 全绿；
 5. 下载该提交的 Linux amd64 binary 与精确 `company-ops` artifact，验证 manifest 和每个文件 SHA256；
 6. 从 `company/egress-v1-ubuntu22.04` 建第二条临时 `company/upgrade-ubuntu22-*` 分支，合并已验证的 Company 临时分支；
 7. 再次运行静态门，推送第二条临时分支并等待 Ubuntu 22.04 CI 与 Security Scan 全绿；
-8. 只有两套 CI/Security 全部成功后，才以一次 atomic push 同时推进 `main`、`company/egress-v1`、`company/egress-v1-ubuntu22.04`；
+8. 只有两套 CI/Security 全部成功后，才以一次 atomic push 同时推进 `main`、`company/egress-v1`、`company/egress-v1-ubuntu22.04`；公司仓库的 `main` 与已验证的 `company/egress-v1` 保持同一提交，纯官方基线由 `upstream` 与 manifest 记录；
 9. 发布成功后删除两条临时分支；失败时保留可审计临时分支，不 force push、不自动 reset 正式分支；
 10. 输出 `dist/company/latest.json`，不操作任何服务器。
 
@@ -642,7 +642,7 @@ git status --short
 dist/company/latest.json
 ~~~
 
-它记录：upstream commit、Company commit、Ubuntu 22.04 commit、两套分支各自的 binary 路径/SHA256、ops 路径/manifest SHA256，以及两套 CI/Security URL。Ubuntu 24.04 使用 Company artifact，Ubuntu 22.04 使用 `ubuntu22_*` artifact；服务器上传与部署参数必须来自该文件和对应 OS artifact，不要凭聊天记录、旧文件名或手工猜测 SHA。
+它记录：Company版本、官方版本、upstream commit、Company commit、Ubuntu 22.04 commit、Codex候选版本、两套分支各自的 binary 路径/SHA256、ops 路径/manifest SHA256，以及两套 CI/Security URL。Ubuntu 24.04 使用 Company artifact，Ubuntu 22.04 使用 `ubuntu22_*` artifact；服务器上传与部署参数必须来自该文件和对应 OS artifact，不要凭聊天记录、旧文件名或手工猜测 SHA。
 
 ### 11.4 完整 production Go 网络静态门
 

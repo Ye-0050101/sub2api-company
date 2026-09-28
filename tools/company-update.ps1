@@ -48,9 +48,9 @@ if ((Get-CheckedOutput git @('rev-parse', 'HEAD')) -ne
     (Get-CheckedOutput git @('rev-parse', "origin/$companyBranch"))) {
     throw 'Local company/egress-v1 must exactly match origin before updating.'
 }
-if ((Get-CheckedOutput git @('rev-parse', 'main')) -ne
-    (Get-CheckedOutput git @('rev-parse', 'origin/main'))) {
-    throw 'Local main must exactly match origin before updating.'
+if ((Get-CheckedOutput git @('rev-parse', 'origin/main')) -ne
+    (Get-CheckedOutput git @('rev-parse', "origin/$companyBranch"))) {
+    throw 'origin/main must exactly mirror origin/company/egress-v1 before updating.'
 }
 
 $credentialLines = "protocol=https`nhost=github.com`n`n" | git credential fill
@@ -69,8 +69,18 @@ $headers = @{
 }
 $repoApi = 'https://api.github.com/repos/Ye-0050101/sub2api-company'
 
+if ($UpstreamRef -notmatch '^v(?<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+    throw 'UpstreamRef must be an exact official stable tag such as v0.2.9.'
+}
+$upstreamVersion = $Matches.version
 Invoke-Checked git @('fetch', 'upstream', '--tags')
 $targetSha = Get-CheckedOutput git @('rev-parse', '--verify', "$UpstreamRef`^{commit}")
+$officialTagSha = Get-CheckedOutput git @('rev-parse', '--verify', "refs/tags/$UpstreamRef`^{commit}")
+if ($targetSha -ne $officialTagSha) {
+    throw 'UpstreamRef did not resolve to the fetched official tag.'
+}
+& git merge-base --is-ancestor $targetSha upstream/main
+if ($LASTEXITCODE -ne 0) { throw 'Official tag is not contained in upstream/main.' }
 $baseline = 'e8cb019fabf8b55199436229044cbf9aa7a82564'
 & git merge-base --is-ancestor $baseline $targetSha
 if ($LASTEXITCODE -ne 0) { throw 'Target is not a descendant of the frozen Company V1 baseline.' }
@@ -309,12 +319,13 @@ catch {
     throw
 }
 
-# Publish the three verified commit IDs explicitly. Never publish an
-# unverified local branch tip; the atomic non-force push also rejects races.
+# The company fork's main branch mirrors the verified Company branch. The raw
+# official baseline remains traceable through upstream_commit and the upstream
+# remote; publishing raw upstream code on main would drop Company enforcement.
 try {
     Invoke-Checked git @(
         'push', '--atomic', 'origin',
-        ('{0}:refs/heads/main' -f $targetSha),
+        ('{0}:refs/heads/main' -f $companyCommit),
         ('{0}:refs/heads/{1}' -f $companyCommit, $companyBranch),
         ('{0}:refs/heads/{1}' -f $ubuntuCommit, $ubuntuBranch)
     )
@@ -328,7 +339,7 @@ catch {
 # publication if a local checkout cannot be refreshed.
 try {
     Invoke-Checked git @('switch', 'main')
-    Invoke-Checked git @('merge', '--ff-only', $targetSha)
+    Invoke-Checked git @('merge', '--ff-only', $tempBranch)
     Invoke-Checked git @('switch', $companyBranch)
     Invoke-Checked git @('merge', '--ff-only', $tempBranch)
     Invoke-Checked git @('switch', $ubuntuBranch)
@@ -359,7 +370,13 @@ if ($LASTEXITCODE -ne 0) {
     Write-Warning 'Verified temporary remote branches could not be removed; official refs remain valid.'
 }
 
+$companyVersion = (Get-Content -LiteralPath (Join-Path $repoRoot 'COMPANY_VERSION') -Raw).Trim()
+if ($companyVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw 'COMPANY_VERSION must contain one major.minor.patch version.'
+}
 $manifest = [ordered]@{
+    company_version = $companyVersion
+    upstream_version = $upstreamVersion
     codex_candidate_version = $codexCandidate.Version
     codex_candidate_tag = $codexCandidate.Tag
     codex_candidate_url = $codexCandidate.Url

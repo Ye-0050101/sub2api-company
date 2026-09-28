@@ -3,9 +3,11 @@
 ## 状态
 
 - 设计：ProxyID-only / ADOPT / FREEZE
+- 当前官方集成基线：Sub2API `v0.2.9`（`4c00df2e0183e2c70b7fa8ba45914205e36aad0c`）
+- Company 发行版本：`1.2.0`
 - 数据库：无 schema 变更、无 migration
 - 服务器：本 patchset 不修改服务器或现有 sing-box
-- 生产：NOT READY；必须通过完整 activation gate
+- 生产：GitHub源码候选；必须等待 Ubuntu 24.04/22.04 CI、安全扫描及后续服务器 activation gate
 
 ## 已实现的源码面
 
@@ -27,7 +29,7 @@
 - `backend/internal/service/managed_proxy.go`
   - deployment config -> immutable ProxyID policy
   - platform/type 支持矩阵
-  - INTERNATIONAL country allowlist：US / SG / JP / KR；CN_DIRECT：CN
+  - INTERNATIONAL country allowlist：US / SG / JP / KR / HK / TW；CN_DIRECT：CN
   - Proxy 不变量、class、custom base URL、destination allowlist
   - EgressResolver 与现有 OAuth session.ProxyURL 绑定，不修改上游 session DTO
 - `backend/internal/repository/company_managed_proxy_health.go`
@@ -58,6 +60,7 @@
 - Grok OAuth：统一项目 proxy parser/transport；官方 token endpoint 固定
 - Antigravity OAuth：company production provider 直接 UNSUPPORTED
 - managed OpenAI 请求不允许本地插件接管；第三方 Web Search emulation 在 enforcement 下关闭
+- Company managed 模式不向本地插件注入 OpenAI OAuth 账号目录，避免插件读取 access token、身份头与 ProxyURL
 - ProxyService sentinel：受管 Proxy readonly 错误
 - Company build：`BuildType=company`；后端在线更新/在线回退 fail closed，不访问官方 release API
 - Company version UI：隐藏官方更新、release 链接和在线回退，只提示使用批准的更新/部署脚本
