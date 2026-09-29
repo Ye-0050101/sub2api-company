@@ -1,6 +1,44 @@
 {
   "outbounds": [
     {
+      "type": "tuic",
+      "tag": "us-a-tuic",
+      "server": "<LITERAL_NODE_IPV4_A>",
+      "server_port": 443,
+      "uuid": "<REPLACE_CANONICAL_UUID>",
+      "password": "<REPLACE>",
+      "congestion_control": "bbr",
+      "udp_relay_mode": "native",
+      "tls": {
+        "enabled": true,
+        "server_name": "node-a.example.com",
+        "insecure": false
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "us-b-vless",
+      "server": "<LITERAL_NODE_IPV4_B>",
+      "server_port": 443,
+      "uuid": "<REPLACE_CANONICAL_UUID>",
+      "flow": "xtls-rprx-vision",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "reality.example.com",
+        "insecure": false,
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<REPLACE_43_CHARACTER_BASE64URL_PUBLIC_KEY>",
+          "short_id": "<REPLACE_EVEN_LENGTH_HEX_SHORT_ID>"
+        }
+      }
+    },
+    {
       "type": "anytls",
       "tag": "us-a-anytls",
       "server": "<LITERAL_NODE_IPV4_A>",
@@ -21,18 +59,6 @@
       "tls": {
         "enabled": true,
         "server_name": "node-a.example.com",
-        "insecure": false
-      }
-    },
-    {
-      "type": "anytls",
-      "tag": "us-b-anytls",
-      "server": "<LITERAL_NODE_IPV4_B>",
-      "server_port": 443,
-      "password": "<REPLACE>",
-      "tls": {
-        "enabled": true,
-        "server_name": "node-b.example.com",
         "insecure": false
       }
     }

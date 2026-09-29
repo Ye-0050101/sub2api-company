@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import threading
+from unittest import mock
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +42,29 @@ def subscription():
             outbound("tuic", "disaster-tuic", "8.8.4.4", 9443),
             outbound("anytls", "unused", "208.67.222.222", 443),
         ]
+    }
+
+
+def vless_outbound(tag="disaster-vless", server="8.8.4.4", port=443):
+    return {
+        "type": "vless",
+        "tag": tag,
+        "server": server,
+        "server_port": port,
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "flow": "xtls-rprx-vision",
+        "network": "tcp",
+        "tls": {
+            "enabled": True,
+            "server_name": "reality.example.com",
+            "insecure": False,
+            "utls": {"enabled": True, "fingerprint": "chrome"},
+            "reality": {
+                "enabled": True,
+                "public_key": "A" * 43,
+                "short_id": "0123456789abcdef",
+            },
+        },
     }
 
 
@@ -153,6 +178,91 @@ class CompanyRouteTest(unittest.TestCase):
             bad_hy2["server_ports"] = invalid
             with self.assertRaises(company_route.RouteError):
                 company_route.normalize(route_spec(), bad)
+
+    def test_vless_reality_vision_is_strict_and_uses_tcp_guard(self):
+        selected = subscription()
+        selected["outbounds"].append(vless_outbound())
+        spec = route_spec()
+        spec["candidates"][-1]["subscription_tag"] = "disaster-vless"
+        route = company_route.normalize(spec, selected)
+        candidate = route["candidates"][-1]
+        self.assertEqual(candidate["outbound"]["type"], "vless")
+        self.assertEqual(candidate["outbound"]["flow"], "xtls-rprx-vision")
+        self.assertIn("tcp dport 443", company_route.guard(route, 999))
+
+        for mutate, message in (
+            (lambda item: item.update(flow=""), "flow"),
+            (lambda item: item["tls"]["reality"].update(enabled=False), "reality.enabled"),
+            (lambda item: item["tls"]["utls"].update(fingerprint="random"), "fingerprint"),
+            (lambda item: item["tls"]["reality"].update(short_id="not-hex"), "short_id"),
+        ):
+            bad = subscription()
+            outbound = vless_outbound()
+            mutate(outbound)
+            bad["outbounds"].append(outbound)
+            with self.assertRaisesRegex(company_route.RouteError, message):
+                company_route.normalize(spec, bad)
+
+    def test_failover_uses_two_failures_and_five_successes_for_failback(self):
+        route = {
+            "route_key": "us-a",
+            "country_code": "US",
+            "failure_threshold": 2,
+            "recovery_threshold": 5,
+            "candidates": [{"tag": "primary"}, {"tag": "secondary"}],
+        }
+        selected = {"value": "primary"}
+        health = {"primary": False, "secondary": True}
+
+        def fake_clash(_route, _secret, method, body=None):
+            if method == "GET":
+                return {"now": selected["value"]}
+            selected["value"] = body["name"]
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(company_route, "STATE_ROOT", Path(tmp)), \
+             mock.patch.object(company_route, "installed_route", return_value=(route, "secret")), \
+             mock.patch.object(company_route, "clash", side_effect=fake_clash), \
+             mock.patch.object(company_route, "candidate_healthy", side_effect=lambda item, _country: health[item["tag"]]), \
+             mock.patch("sys.stdout"):
+            with self.assertRaises(company_route.RouteError):
+                company_route.failover("us-a")
+            self.assertEqual(selected["value"], "primary")
+            company_route.failover("us-a")
+            self.assertEqual(selected["value"], "secondary")
+
+            health["primary"] = True
+            for _ in range(4):
+                company_route.failover("us-a")
+                self.assertEqual(selected["value"], "secondary")
+            company_route.failover("us-a")
+            self.assertEqual(selected["value"], "primary")
+            state = json.loads((Path(tmp) / "us-a.json").read_text())
+            self.assertEqual(state["consecutive_recoveries"], 0)
+
+    def test_failover_probes_candidates_in_parallel_but_keeps_priority_order(self):
+        route = {
+            "route_key": "us-a",
+            "country_code": "US",
+            "failure_threshold": 2,
+            "recovery_threshold": 5,
+            "candidates": [{"tag": "first"}, {"tag": "second"}],
+        }
+        barrier = threading.Barrier(2)
+
+        def concurrent_probe(_item, _country):
+            barrier.wait(timeout=1)
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(company_route, "STATE_ROOT", Path(tmp)), \
+             mock.patch.object(company_route, "installed_route", return_value=(route, "secret")), \
+             mock.patch.object(company_route, "clash", return_value={"now": "block"}) as clash, \
+             mock.patch.object(company_route, "candidate_healthy", side_effect=concurrent_probe), \
+             mock.patch("sys.stdout"):
+            company_route.failover("us-a")
+        clash.assert_any_call(route, "secret", "PUT", {"name": "first"})
 
     def test_rejects_missing_disaster_candidate_and_unknown_country(self):
         no_disaster = route_spec()

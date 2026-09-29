@@ -166,6 +166,57 @@ class CompanyCtlTest(unittest.TestCase):
         combined = companyctl.urllib.parse.unquote(parsed.username or "")
         self.assertEqual(combined.split(":", 1), ["test-uuid", "test-password"])
 
+    def test_vless_reality_uri_is_normalized_without_private_server_material(self):
+        uri = (
+            "vless://00000000-0000-4000-8000-000000000002@8.8.8.8:443"
+            "?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision"
+            "&sni=reality.example.com&fp=chrome&pbk=" + "A" * 43 +
+            "&sid=0123456789abcdef&spx=%2Fexample&headerType=none"
+        )
+        outbound = companyctl.vless_outbound(uri, "disaster")
+        self.assertEqual(outbound["type"], "vless")
+        self.assertEqual(outbound["network"], "tcp")
+        self.assertEqual(outbound["tls"]["reality"]["public_key"], "A" * 43)
+        self.assertNotIn("private_key", json.dumps(outbound))
+        for changed in (
+            uri.replace("security=reality", "security=tls"),
+            uri.replace("flow=xtls-rprx-vision", "flow="),
+            uri.replace("fp=chrome", "fp=random"),
+            uri.replace("sid=0123456789abcdef", "sid=bad-id"),
+        ):
+            with self.assertRaises(companyctl.CompanyCtlError):
+                companyctl.vless_outbound(changed, "disaster")
+
+    def test_candidate_defaults_match_company_priority_plan(self):
+        self.assertEqual(companyctl.default_candidate_priority("primary", "tuic"), 10)
+        self.assertEqual(companyctl.default_candidate_priority("disaster", "vless"), 20)
+        self.assertEqual(companyctl.default_candidate_priority("primary", "anytls"), 30)
+        self.assertEqual(companyctl.default_candidate_priority("primary", "hysteria2"), 40)
+
+    def test_route_replace_preserves_proxy_and_local_ports(self):
+        existing = {
+            "route_key": "us-a",
+            "country_code": "US",
+            "proxy_id": 10,
+            "socks_port": 11000,
+            "api_port": 19000,
+            "expected_exit_ipv4": "8.8.8.8",
+            "disaster_exit_ipv4": "1.1.1.1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            routes = Path(tmp)
+            route = routes / "us-a"
+            route.mkdir()
+            (route / "metadata.json").write_text(json.dumps(existing))
+            with mock.patch.object(companyctl, "ROUTES", routes), \
+                 mock.patch("builtins.input", side_effect=["", ""]), \
+                 mock.patch.object(companyctl, "route_payload", return_value=({"version": 1}, [])) as payload, \
+                 mock.patch.object(companyctl, "activate_route") as activate, \
+                 mock.patch("sys.stdout", new_callable=io.StringIO):
+                companyctl.route_replace("us-a")
+            payload.assert_called_once_with("us-a", "US", 10, 11000, 19000, "8.8.8.8", "1.1.1.1")
+            activate.assert_called_once_with({"version": 1}, [], replace=True)
+
     def test_operations_keep_exact_probe_and_verified_backup_policy(self):
         install = (ROOT / "deploy" / "company-install-fresh.sh").read_text()
         activate = (ROOT / "deploy" / "company-activate-egress.sh").read_text()
@@ -211,6 +262,9 @@ class CompanyCtlTest(unittest.TestCase):
     def test_route_success_clears_the_real_config_rollback_flag(self):
         apply = (ROOT / "deploy" / "company-route-apply.sh").read_text()
         self.assertIsNone(re.search(r"^pp_config_changed=", apply, re.MULTILINE))
+        self.assertIn("--replace) replace_mode=1", apply)
+        self.assertIn("route replacement must preserve", apply)
+        self.assertIn("ROUTE_REPLACED route=", apply)
 
 
 if __name__ == "__main__":

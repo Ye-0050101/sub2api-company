@@ -175,7 +175,9 @@ A.IP == optional disaster_exit_ipv4
 私网/保留地址、missing loc、IP disagreement、country mismatch、Proxy 变化
 或 health TTL 过期仍为 UNHEALTHY/FAIL CLOSED。
 
-协议与灾备自动化由本地 sing-box selector/controller 完成：同一主 IP 内严格按 `AnyTLS -> HY2 -> TUIC`；三者连续失败至少 180 秒才允许切到灾备 AnyTLS。灾备失败选择 BLOCK；主 IP 连续恢复至少 180 秒后自动回切。Sub2API fallback 始终保持 `none`。
+协议与灾备自动化由本地 sing-box selector/controller 完成。候选优先级由受控 Route spec 明确给出；公司美国线路的计划顺序为 `主节点 TUIC -> 灾备节点 VLESS+REALITY Vision -> 主节点 AnyTLS -> 主节点 HY2 -> BLOCK`。各候选通过相互独立的本机探测端口并行验证，但最终选择始终按配置优先级而不是探测完成顺序。当前候选连续失败 2 次后降级；更高优先级候选连续恢复 5 次后才回切，防止线路抖动中断长连接。Sub2API fallback 始终保持 `none`，不得使用 direct fallback。
+
+Route replacement 必须保持 `route_key`、`country_code`、`proxy_id`、本机 SOCKS 端口和本机控制端口不变。新配置通过 sing-box 与 nftables 预检查后才能进入维护切换；失败必须恢复旧 Route、Company 配置、选择状态和服务。节点凭据不得写入 metadata、日志或数据库。
 
 - startup preflight：所有配置 Proxy 必须先通过
 - periodic probe interval：60 秒
