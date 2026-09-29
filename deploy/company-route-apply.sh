@@ -3,10 +3,12 @@ set -Eeuo pipefail
 
 spec=""
 subscription=""
+replace_mode=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --spec) spec=$2; shift ;;
     --subscription) subscription=$2; shift ;;
+    --replace) replace_mode=1 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -22,7 +24,7 @@ die() { echo "REFUSING: $*" >&2; return 1; }
   die "subscription must be root:root 0600"
 [[ -x /opt/sub2api-egress/bin/sing-box ]] || die "approved sing-box is missing"
 [[ -f /opt/sub2api/config.yaml ]] || die "Sub2API config is missing"
-systemctl is-active --quiet sub2api.service || die "Sub2API must be healthy before adding a route"
+systemctl is-active --quiet sub2api.service || die "Sub2API must be healthy before changing a route"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 route_tool=$script_dir/company-route.py
@@ -37,8 +39,9 @@ flock -n 9 || die "another Company route operation is running"
 
 install -d -o root -g root -m 0700 /var/backups/sub2api
 stage=$(mktemp -d /etc/sub2api-egress/.route-stage.XXXXXX)
-backup=$(mktemp -d /var/backups/sub2api/route-add.XXXXXX)
+backup=$(mktemp -d /var/backups/sub2api/route-change.XXXXXX)
 route_installed=0
+route_replaced=0
 proxy_registered=0
 app_stopped=0
 app_config_changed=0
@@ -55,6 +58,34 @@ cleanup_stage() {
 rollback() {
   trap - ERR INT TERM
   echo "Route activation failed; restoring the previous application state" >&2
+  if [[ $route_replaced -eq 1 && -n $route_key ]]; then
+    systemctl stop sub2api.service >/dev/null 2>&1 || true
+    systemctl stop "sub2api-route-$route_key-failover.timer" >/dev/null 2>&1 || true
+    systemctl stop "sub2api-route-$route_key-failover.service" >/dev/null 2>&1 || true
+    systemctl stop "sub2api-egress-$route_key.service" >/dev/null 2>&1 || true
+    systemctl stop "sub2api-route-$route_key-guard.service" >/dev/null 2>&1 || true
+    rm -rf -- "/etc/sub2api-egress/routes/$route_key"
+    if [[ -d $backup/route ]]; then
+      cp -a "$backup/route" "/etc/sub2api-egress/routes/$route_key"
+    fi
+    state_path="/var/lib/sub2api-route-control/$route_key.json"
+    if [[ -f $backup/state.json ]]; then
+      install -o sub2api-egress-control -g sub2api-egress-control -m 0640 "$backup/state.json" "$state_path" || true
+    else
+      rm -f -- "$state_path"
+    fi
+    [[ -f $backup/config.yaml ]] && install -o sub2api -g sub2api -m 0600 "$backup/config.yaml" /opt/sub2api/config.yaml
+    [[ -f $backup/guard.nft ]] && install -o root -g root -m 0640 "$backup/guard.nft" /etc/sub2api-egress/sub2api/guard.nft
+    systemctl daemon-reload || true
+    systemctl restart sub2api-egress-guard.service || true
+    systemctl start "sub2api-route-$route_key-guard.service" || true
+    systemctl start "sub2api-egress-$route_key.service" || true
+    systemctl start "sub2api-route-$route_key-failover.service" || true
+    systemctl start "sub2api-route-$route_key-failover.timer" || true
+    systemctl start sub2api.service || true
+    route_replaced=0
+    app_config_changed=0
+  fi
   if [[ $app_config_changed -eq 1 ]]; then
     systemctl stop sub2api.service >/dev/null 2>&1 || true
     [[ -f $backup/config.yaml ]] && install -o sub2api -g sub2api -m 0600 "$backup/config.yaml" /opt/sub2api/config.yaml
@@ -68,7 +99,7 @@ rollback() {
   if [[ $proxy_registered -eq 1 && -n $database ]]; then
     sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d "$database" -c       "DELETE FROM proxies WHERE id=$PROXY_ID AND NOT EXISTS (SELECT 1 FROM accounts WHERE proxy_id=$PROXY_ID);" || true
   fi
-  if [[ $route_installed -eq 1 && -n $route_key ]]; then
+  if [[ $route_installed -eq 1 && $replace_mode -eq 0 && -n $route_key ]]; then
     systemctl disable --now "sub2api-route-$route_key-failover.timer" >/dev/null 2>&1 || true
     systemctl stop "sub2api-route-$route_key-failover.service" >/dev/null 2>&1 || true
     systemctl disable --now "sub2api-egress-$route_key.service" >/dev/null 2>&1 || true
@@ -88,14 +119,28 @@ python3 "$route_tool" render --spec "$spec" --subscription "$subscription" --out
 source "$stage/rendered/route.env"
 route_key=$ROUTE_KEY
 route_dir="/etc/sub2api-egress/routes/$ROUTE_KEY"
-[[ ! -e $route_dir ]] || die "route_key already exists; route core policy is immutable"
+if [[ $replace_mode -eq 1 ]]; then
+  [[ -d $route_dir && -f $route_dir/metadata.json ]] || die "route_key does not exist"
+  python3 - "$route_dir/metadata.json" "$stage/rendered/metadata.json" <<'PY'
+import json, pathlib, sys
+old = json.loads(pathlib.Path(sys.argv[1]).read_text())
+new = json.loads(pathlib.Path(sys.argv[2]).read_text())
+for key in ("route_key", "country_code", "proxy_id", "socks_port", "api_port"):
+    if old.get(key) != new.get(key):
+        raise SystemExit(f"route replacement must preserve {key}")
+PY
+else
+  [[ ! -e $route_dir ]] || die "route_key already exists; use companyctl route replace"
+fi
 
-python3 - "$stage/rendered/metadata.json" /etc/sub2api-egress/routes <<'PY'
+python3 - "$stage/rendered/metadata.json" /etc/sub2api-egress/routes "$ROUTE_KEY" <<'PY'
 import json, pathlib, sys
 candidate = json.loads(pathlib.Path(sys.argv[1]).read_text())
 ports = {candidate["socks_port"], candidate["api_port"]}
 ports.update(item["probe_port"] for item in candidate["candidates"])
 for path in pathlib.Path(sys.argv[2]).glob("*/metadata.json"):
+    if path.parent.name == sys.argv[3]:
+        continue
     other = json.loads(path.read_text())
     if other["proxy_id"] == candidate["proxy_id"]:
         raise SystemExit("proxy_id is already owned by another Company route")
@@ -117,9 +162,21 @@ PY
 [[ -n $database ]] || die "database name is missing"
 
 existing=$(sudo -u postgres psql -X -At -d "$database" -c "SELECT id FROM proxies WHERE id=$PROXY_ID;")
-[[ -z $existing ]] || die "proxy_id $PROXY_ID already exists"
+if [[ $replace_mode -eq 1 ]]; then
+  [[ $existing == "$PROXY_ID" ]] || die "managed proxy_id $PROXY_ID is missing"
+  immutable=$(sudo -u postgres psql -X -At -F '|' -d "$database" -c \
+    "SELECT protocol,host,port,status,COALESCE(username,''),COALESCE(password,''),fallback_mode,COALESCE(backup_proxy_id::text,''),COALESCE(expires_at::text,''),COALESCE(deleted_at::text,'') FROM proxies WHERE id=$PROXY_ID;")
+  [[ $immutable == "socks5h|127.0.0.1|$SOCKS_PORT|active|||none|||" ]] ||
+    die "managed proxy $PROXY_ID violates immutable replacement policy"
+else
+  [[ -z $existing ]] || die "proxy_id $PROXY_ID already exists"
+fi
 collision=$(sudo -u postgres psql -X -At -d "$database" -c   "SELECT id FROM proxies WHERE deleted_at IS NULL AND host='127.0.0.1' AND port=$SOCKS_PORT LIMIT 1;")
-[[ -z $collision ]] || die "SOCKS endpoint is already used by proxy_id $collision"
+if [[ $replace_mode -eq 1 ]]; then
+  [[ $collision == "$PROXY_ID" ]] || die "SOCKS endpoint is not owned by proxy_id $PROXY_ID"
+else
+  [[ -z $collision ]] || die "SOCKS endpoint is already used by proxy_id $collision"
+fi
 
 route_user="sub2api-egress-$ROUTE_KEY"
 id "$route_user" >/dev/null 2>&1 ||
@@ -129,14 +186,34 @@ id sub2api-egress-control >/dev/null 2>&1 ||
 route_uid=$(id -u "$route_user")
 control_uid=$(id -u sub2api-egress-control)
 
+python3 "$route_tool" guard --metadata "$stage/rendered/metadata.json" --uid "$route_uid" >"$stage/rendered/guard.nft"
+chmod 0640 "$stage/rendered/guard.nft"
+/opt/sub2api-egress/bin/sing-box check -c "$stage/rendered/config.json"
+nft -c -f "$stage/rendered/guard.nft"
+
+if [[ $replace_mode -eq 1 ]]; then
+  cp -a "$route_dir" "$backup/route"
+  install -o sub2api -g sub2api -m 0600 /opt/sub2api/config.yaml "$backup/config.yaml"
+  install -o root -g root -m 0640 /etc/sub2api-egress/sub2api/guard.nft "$backup/guard.nft"
+  state_path="/var/lib/sub2api-route-control/$ROUTE_KEY.json"
+  [[ ! -f $state_path ]] || cp -a "$state_path" "$backup/state.json"
+  route_replaced=1
+  systemctl stop sub2api.service
+  app_stopped=1
+  systemctl stop "sub2api-route-$ROUTE_KEY-failover.timer"
+  systemctl stop "sub2api-route-$ROUTE_KEY-failover.service" >/dev/null 2>&1 || true
+  systemctl stop "sub2api-egress-$ROUTE_KEY.service"
+  systemctl stop "sub2api-route-$ROUTE_KEY-guard.service"
+  rm -rf -- "$route_dir"
+fi
+
 install -d -o root -g root -m 0711 /etc/sub2api-egress/routes "$route_dir"
 install -o root -g "$route_user" -m 0640 "$stage/rendered/config.json" "$route_dir/config.json"
 install -o root -g sub2api-egress-control -m 0640 "$stage/rendered/metadata.json" "$route_dir/metadata.json"
 install -o root -g sub2api-egress-control -m 0640 "$stage/rendered/clash-api.secret" "$route_dir/clash-api.secret"
 install -o root -g root -m 0600 "$stage/rendered/route.env" "$route_dir/route.env"
-route_installed=1
-python3 "$route_tool" guard --metadata "$route_dir/metadata.json" --uid "$route_uid" >"$route_dir/guard.nft"
-chmod 0640 "$route_dir/guard.nft"
+install -o root -g root -m 0640 "$stage/rendered/guard.nft" "$route_dir/guard.nft"
+[[ $replace_mode -eq 1 ]] || route_installed=1
 /opt/sub2api-egress/bin/sing-box check -c "$route_dir/config.json"
 nft -c -f "$route_dir/guard.nft"
 
@@ -283,15 +360,14 @@ install -o sub2api -g sub2api -m 0600 /opt/sub2api/config.yaml "$backup/config.y
 install -o root -g root -m 0640 /etc/sub2api-egress/sub2api/guard.nft "$backup/guard.nft"
 
 new_config="$stage/config.yaml.new"
-python3 - "$route_dir/metadata.json" /opt/sub2api/config.yaml "$new_config" <<'PY'
+python3 - "$route_dir/metadata.json" /opt/sub2api/config.yaml "$new_config" "$replace_mode" <<'PY'
 import json, pathlib, sys, yaml
 route = json.loads(pathlib.Path(sys.argv[1]).read_text())
 cfg = yaml.safe_load(pathlib.Path(sys.argv[2]).read_text()) or {}
+replace = sys.argv[4] == "1"
 company = cfg.setdefault("company_egress", {})
 company["development_bypass"] = False
 managed = company.setdefault("managed_proxies", [])
-if any(int(item.get("proxy_id", 0)) == route["proxy_id"] for item in managed):
-    raise SystemExit("proxy_id already exists in Company policy")
 entry = {
     "proxy_id": route["proxy_id"],
     "class": "INTERNATIONAL_PROXY",
@@ -300,7 +376,19 @@ entry = {
 }
 if route["disaster_exit_ipv4"]:
     entry["disaster_exit_ipv4"] = route["disaster_exit_ipv4"]
-managed.append(entry)
+indexes = [index for index, item in enumerate(managed) if int(item.get("proxy_id", 0)) == route["proxy_id"]]
+if replace:
+    if len(indexes) != 1 or str(managed[indexes[0]].get("class") or "") != "INTERNATIONAL_PROXY":
+        raise SystemExit("replacement proxy policy is missing or ambiguous")
+    replacement = dict(managed[indexes[0]])
+    replacement.update(entry)
+    if not route["disaster_exit_ipv4"]:
+        replacement.pop("disaster_exit_ipv4", None)
+    managed[indexes[0]] = replacement
+elif indexes:
+    raise SystemExit("proxy_id already exists in Company policy")
+else:
+    managed.append(entry)
 managed.sort(key=lambda item: int(item["proxy_id"]))
 if route["route_key"] == "us-a":
     if route["country_code"] != "US":
@@ -317,6 +405,7 @@ pathlib.Path(sys.argv[3]).write_text(
 PY
 
 proxy_name="Company $COUNTRY_CODE $ROUTE_KEY"
+if [[ $replace_mode -eq 0 ]]; then
 sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d "$database"   -v proxy_id="$PROXY_ID" -v proxy_name="$proxy_name" -v proxy_port="$SOCKS_PORT" <<'SQL'
 INSERT INTO proxies (
   id,name,protocol,host,port,username,password,status,fallback_mode,
@@ -328,6 +417,7 @@ INSERT INTO proxies (
 SELECT setval(pg_get_serial_sequence('proxies','id'),(SELECT max(id) FROM proxies),true);
 SQL
 proxy_registered=1
+fi
 
 managed_ids=$(python3 - "$new_config" <<'PY'
 import pathlib, sys, yaml
@@ -399,8 +489,13 @@ done
 [[ $healthy -eq 1 ]] || die "Sub2API did not become healthy"
 app_stopped=0
 app_config_changed=0
+route_replaced=0
 
 trap - ERR INT TERM
 cleanup_stage
-echo "ROUTE_READY route=$ROUTE_KEY proxy_id=$PROXY_ID country=$COUNTRY_CODE exit_ipv4=$observed socks=127.0.0.1:$SOCKS_PORT"
+if [[ $replace_mode -eq 1 ]]; then
+  echo "ROUTE_REPLACED route=$ROUTE_KEY proxy_id=$PROXY_ID country=$COUNTRY_CODE exit_ipv4=$observed socks=127.0.0.1:$SOCKS_PORT backup=$backup"
+else
+  echo "ROUTE_READY route=$ROUTE_KEY proxy_id=$PROXY_ID country=$COUNTRY_CODE exit_ipv4=$observed socks=127.0.0.1:$SOCKS_PORT"
+fi
 echo "The uploaded subscription file is no longer needed after operator verification."

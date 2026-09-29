@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
+import uuid
 
 
 COUNTRIES = ("US", "SG", "JP", "KR", "HK", "TW")
@@ -186,11 +187,73 @@ def hy2_ports(query: dict[str, str], base_port: int, role: str) -> list[int]:
     return selected
 
 
+def vless_outbound(raw: str, role: str) -> dict:
+    parsed, query = parse_uri(raw, "vless")
+    raw_uuid = urllib.parse.unquote(parsed.username or "").strip()
+    try:
+        checked_uuid = uuid.UUID(raw_uuid)
+    except (ValueError, AttributeError) as exc:
+        raise CompanyCtlError("VLESS user id must be a valid UUID") from exc
+    if str(checked_uuid) != raw_uuid.lower():
+        raise CompanyCtlError("VLESS user id must use canonical UUID form")
+    if query_value(query, "security").lower() != "reality":
+        raise CompanyCtlError("VLESS security must be reality")
+    if query_value(query, "flow").lower() != "xtls-rprx-vision":
+        raise CompanyCtlError("VLESS flow must be xtls-rprx-vision")
+    if query_value(query, "type", "network", default="tcp").lower() != "tcp":
+        raise CompanyCtlError("VLESS transport must be tcp")
+    encryption = query_value(query, "encryption", default="none").lower()
+    if encryption != "none":
+        raise CompanyCtlError("VLESS encryption must be none")
+    server_name = query_value(query, "sni", "server_name")
+    if not re.fullmatch(r"(?=.{1,253}$)[A-Za-z0-9.-]+", server_name):
+        raise CompanyCtlError("VLESS Reality requires an explicit SNI hostname")
+    public_key = query_value(query, "pbk", "public_key", "publickey")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", public_key):
+        raise CompanyCtlError("VLESS Reality public key must be unpadded 32-byte base64url")
+    try:
+        decoded_key = base64.b64decode(public_key + "=", altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise CompanyCtlError("VLESS Reality public key is invalid") from exc
+    if len(decoded_key) != 32:
+        raise CompanyCtlError("VLESS Reality public key must decode to 32 bytes")
+    short_id = query_value(query, "sid", "short_id", "shortid").lower()
+    if not re.fullmatch(r"(?:[0-9a-f]{2}){1,8}", short_id):
+        raise CompanyCtlError("VLESS Reality short id must contain 2 to 16 hexadecimal characters")
+    fingerprint = query_value(query, "fp", "fingerprint", default="chrome").lower()
+    if fingerprint not in {"chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android"}:
+        raise CompanyCtlError("VLESS Reality fingerprint is not approved")
+    insecure = query_value(query, "insecure", "allowinsecure", "allow_insecure")
+    if insecure and insecure.lower() not in {"0", "false"}:
+        raise CompanyCtlError("VLESS Reality must not enable insecure TLS")
+    return {
+        "type": "vless",
+        "tag": f"{role}-vless",
+        "server": parsed.hostname,
+        "server_port": parsed.port,
+        "uuid": str(checked_uuid),
+        "flow": "xtls-rprx-vision",
+        "network": "tcp",
+        "tls": {
+            "enabled": True,
+            "server_name": server_name,
+            "insecure": False,
+            "utls": {"enabled": True, "fingerprint": fingerprint},
+            "reality": {
+                "enabled": True,
+                "public_key": public_key,
+                "short_id": short_id,
+            },
+        },
+    }
+
+
 def build_group(role: str) -> list[dict]:
     raw_anytls = secret(f"{role} AnyTLS URI")
     raw_hy2 = secret(f"{role} Hysteria2 URI")
     raw_tuic = secret(f"{role} TUIC URI")
-    if not any((raw_anytls, raw_hy2, raw_tuic)):
+    raw_vless = secret(f"{role} VLESS Reality Vision URI")
+    if not any((raw_anytls, raw_hy2, raw_tuic, raw_vless)):
         raise CompanyCtlError(f"{role} requires at least one protocol")
 
     outbounds: list[dict] = []
@@ -240,7 +303,88 @@ def build_group(role: str) -> list[dict]:
             "udp_relay_mode": query_value(query, "udp_relay_mode", default="native"),
             "tls": tls,
         })
+    if raw_vless:
+        outbounds.append(vless_outbound(raw_vless, role))
     return outbounds
+
+
+def default_candidate_priority(role: str, protocol: str) -> int:
+    planned = {
+        ("primary", "tuic"): 10,
+        ("disaster", "vless"): 20,
+        ("primary", "anytls"): 30,
+        ("primary", "hysteria2"): 40,
+        ("primary", "vless"): 50,
+        ("disaster", "tuic"): 110,
+        ("disaster", "anytls"): 120,
+        ("disaster", "hysteria2"): 130,
+    }
+    return planned[(role, protocol)]
+
+
+def route_payload(
+    route_key: str, country: str, proxy_id: int, socks_port: int, api_port: int,
+    primary_ip: str, disaster_ip: str,
+) -> tuple[dict, list[dict]]:
+    primary = build_group("primary")
+    disaster = build_group("disaster") if disaster_ip else []
+    outbounds = primary + disaster
+    candidates = []
+    priorities: set[int] = set()
+    for index, outbound in enumerate(outbounds):
+        role = "primary" if outbound["tag"].startswith("primary-") else "disaster"
+        protocol = str(outbound["type"])
+        default_priority = default_candidate_priority(role, protocol)
+        priority = int(prompt(f"{outbound['tag']} priority", str(default_priority)))
+        if not 1 <= priority <= 1000 or priority in priorities:
+            raise CompanyCtlError("candidate priorities must be unique integers from 1 to 1000")
+        priorities.add(priority)
+        candidates.append({
+            "subscription_tag": outbound["tag"],
+            "role": role,
+            "priority": priority,
+            "probe_port": socks_port + index + 1,
+        })
+    spec = {
+        "version": 1,
+        "route_key": route_key,
+        "country_code": country,
+        "proxy_id": proxy_id,
+        "socks_port": socks_port,
+        "api_port": api_port,
+        "expected_exit_ipv4": primary_ip,
+        "disaster_exit_ipv4": disaster_ip,
+        "failure_threshold": 2,
+        "recovery_threshold": 5,
+        "candidates": candidates,
+    }
+    return spec, outbounds
+
+
+def activate_route(spec: dict, outbounds: list[dict], *, replace: bool = False) -> None:
+    temp_dir = Path(tempfile.mkdtemp(prefix="companyctl-route-", dir="/root"))
+    spec_path = temp_dir / "route.json"
+    selected_path = temp_dir / "selected.json"
+    try:
+        spec_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+        selected_path.write_text(json.dumps({"outbounds": outbounds}, indent=2) + "\n", encoding="utf-8")
+        os.chmod(spec_path, 0o600)
+        os.chmod(selected_path, 0o600)
+        arguments = [
+            "/usr/local/sbin/company-route-add",
+            "--spec", str(spec_path),
+            "--subscription", str(selected_path),
+        ]
+        if replace:
+            arguments.append("--replace")
+        subprocess.run(arguments, check=True)
+    except subprocess.CalledProcessError as exc:
+        action = "replacement" if replace else "activation"
+        raise CompanyCtlError(f"route {action} failed and was rolled back") from exc
+    finally:
+        secure_unlink(selected_path)
+        secure_unlink(spec_path)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def secure_unlink(path: Path) -> None:
@@ -268,43 +412,52 @@ def route_add() -> None:
     if disaster_ip == primary_ip:
         raise CompanyCtlError("primary and disaster exit IP must differ")
 
-    primary = build_group("primary")
-    disaster = build_group("disaster") if disaster_ip else []
-    outbounds = primary + disaster
-    candidates = []
-    for index, outbound in enumerate(outbounds):
-        role = "primary" if outbound["tag"].startswith("primary-") else "disaster"
-        role_index = index if role == "primary" else index - len(primary)
-        candidates.append({
-            "subscription_tag": outbound["tag"],
-            "role": role,
-            "priority": (10 + role_index * 10) if role == "primary" else (110 + role_index * 10),
-            "probe_port": socks_port + index + 1,
-        })
-    spec = {
-        "version": 1, "route_key": route_key, "country_code": country,
-        "proxy_id": proxy_id, "socks_port": socks_port, "api_port": api_port,
-        "expected_exit_ipv4": primary_ip, "disaster_exit_ipv4": disaster_ip,
-        "failure_threshold": 3, "candidates": candidates,
+    spec, outbounds = route_payload(
+        route_key, country, proxy_id, socks_port, api_port, primary_ip, disaster_ip
+    )
+    activate_route(spec, outbounds)
+
+
+def route_replace(route_key: str) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,15}", route_key):
+        raise CompanyCtlError("invalid route key")
+    metadata_path = ROUTES / route_key / "metadata.json"
+    if not metadata_path.is_file():
+        raise CompanyCtlError(f"managed route {route_key} does not exist")
+    existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+    fixed = {
+        "route_key": str(existing["route_key"]),
+        "country": str(existing["country_code"]),
+        "proxy_id": int(existing["proxy_id"]),
+        "socks_port": checked_port(existing["socks_port"], "existing SOCKS port"),
+        "api_port": checked_port(existing["api_port"], "existing API port"),
     }
-    temp_dir = Path(tempfile.mkdtemp(prefix="companyctl-route-", dir="/root"))
-    spec_path = temp_dir / "route.json"
-    selected_path = temp_dir / "selected.json"
-    try:
-        spec_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
-        selected_path.write_text(json.dumps({"outbounds": outbounds}, indent=2) + "\n", encoding="utf-8")
-        os.chmod(spec_path, 0o600)
-        os.chmod(selected_path, 0o600)
-        subprocess.run(
-            ["/usr/local/sbin/company-route-add", "--spec", str(spec_path), "--subscription", str(selected_path)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise CompanyCtlError("route activation failed and was rolled back") from exc
-    finally:
-        secure_unlink(selected_path)
-        secure_unlink(spec_path)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    if fixed["route_key"] != route_key:
+        raise CompanyCtlError("installed route metadata identity is inconsistent")
+    print(
+        "Preserving managed identity: "
+        f"route={route_key} country={fixed['country']} proxy_id={fixed['proxy_id']} "
+        f"socks=127.0.0.1:{fixed['socks_port']} api=127.0.0.1:{fixed['api_port']}"
+    )
+    primary_ip = public_ipv4(
+        prompt("Primary expected exit IPv4", str(existing["expected_exit_ipv4"])),
+        "primary exit",
+    )
+    old_disaster = str(existing.get("disaster_exit_ipv4") or "")
+    disaster_raw = prompt("Disaster expected exit IPv4 (blank=none)", old_disaster)
+    disaster_ip = public_ipv4(disaster_raw, "disaster exit") if disaster_raw else ""
+    if primary_ip == disaster_ip:
+        raise CompanyCtlError("primary and disaster exit IP must differ")
+    spec, outbounds = route_payload(
+        route_key,
+        fixed["country"],
+        fixed["proxy_id"],
+        fixed["socks_port"],
+        fixed["api_port"],
+        primary_ip,
+        disaster_ip,
+    )
+    activate_route(spec, outbounds, replace=True)
 
 
 def route_list() -> None:
@@ -612,6 +765,8 @@ def main() -> int:
     route_sub = route.add_subparsers(dest="route_command", required=True)
     route_sub.add_parser("add")
     route_sub.add_parser("list")
+    replace = route_sub.add_parser("replace")
+    replace.add_argument("route_key")
     verify_parser = sub.add_parser("verify")
     verify_parser.add_argument("--sha256", default="", help="expected release hash, not the currently installed hash")
     sub.add_parser("status")
@@ -632,6 +787,8 @@ def main() -> int:
     try:
         if args.command == "route" and args.route_command == "add":
             route_add()
+        elif args.command == "route" and args.route_command == "replace":
+            route_replace(args.route_key)
         elif args.command == "route":
             route_list()
         elif args.command == "verify":

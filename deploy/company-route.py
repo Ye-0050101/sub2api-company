@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import concurrent.futures
 import copy
 import ipaddress
 import json
@@ -15,15 +18,22 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 ALLOWED_COUNTRIES = {"US", "SG", "JP", "KR", "HK", "TW"}
-ALLOWED_PROTOCOLS = {"anytls": "tcp", "hysteria2": "udp", "tuic": "udp"}
+ALLOWED_PROTOCOLS = {
+    "anytls": "tcp",
+    "hysteria2": "udp",
+    "tuic": "udp",
+    "vless": "tcp",
+}
 ROUTE_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,15}$")
 HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
 )
 CONFIG_ROOT = Path("/etc/sub2api-egress/routes")
+STATE_ROOT = Path("/var/lib/sub2api-route-control")
 PROBE_B_URL = "https://cloudflare.com/cdn-cgi/trace"
 
 
@@ -64,6 +74,19 @@ def port(raw: object, field: str) -> int:
     return value
 
 
+def reality_public_key(raw: object, field: str) -> str:
+    value = str(raw or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", value):
+        raise RouteError(f"{field} must be an unpadded 32-byte base64url public key")
+    try:
+        decoded = base64.b64decode(value + "=", altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise RouteError(f"{field} must be a valid base64url public key") from exc
+    if len(decoded) != 32:
+        raise RouteError(f"{field} must decode to 32 bytes")
+    return value
+
+
 def load_json(path: Path, label: str, *, root_secret: bool = False) -> dict:
     if not path.is_absolute() or not path.is_file():
         raise RouteError(f"{label} must be an absolute regular file")
@@ -86,7 +109,7 @@ def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, list[int
     outbound = copy.deepcopy(raw)
     protocol = str(outbound.get("type") or "").strip().lower()
     if protocol not in ALLOWED_PROTOCOLS:
-        raise RouteError(f"{label}.type must be anytls, hysteria2, or tuic")
+        raise RouteError(f"{label}.type must be anytls, hysteria2, tuic, or vless")
     node_ip = public_ipv4(outbound.get("server"), f"{label}.server")
     raw_server_ports = outbound.get("server_ports")
     if raw_server_ports is not None:
@@ -129,6 +152,45 @@ def validate_outbound(raw: object, label: str) -> tuple[dict, str, str, list[int
         not str(outbound.get("uuid") or "") or not str(outbound.get("password") or "")
     ):
         raise RouteError(f"{label}.uuid and password are required")
+    if protocol == "vless":
+        raw_uuid = str(outbound.get("uuid") or "").strip()
+        try:
+            checked_uuid = uuid.UUID(raw_uuid)
+        except (ValueError, AttributeError) as exc:
+            raise RouteError(f"{label}.uuid must be a valid UUID") from exc
+        if str(checked_uuid) != raw_uuid.lower():
+            raise RouteError(f"{label}.uuid must use canonical UUID form")
+        if str(outbound.get("flow") or "").strip() != "xtls-rprx-vision":
+            raise RouteError(f"{label}.flow must be xtls-rprx-vision")
+        if str(outbound.get("network") or "tcp").strip().lower() != "tcp":
+            raise RouteError(f"{label}.network must be tcp")
+        if outbound.get("transport") not in (None, {}):
+            raise RouteError(f"{label}.transport is not allowed")
+        if outbound.get("multiplex") not in (None, {}):
+            raise RouteError(f"{label}.multiplex is not allowed")
+        reality = tls.get("reality")
+        if not isinstance(reality, dict) or reality.get("enabled") is not True:
+            raise RouteError(f"{label}.tls.reality.enabled must be true")
+        reality["public_key"] = reality_public_key(
+            reality.get("public_key"), f"{label}.tls.reality.public_key"
+        )
+        short_id = str(reality.get("short_id") or "").strip().lower()
+        if not re.fullmatch(r"(?:[0-9a-f]{2}){1,8}", short_id):
+            raise RouteError(
+                f"{label}.tls.reality.short_id must contain 2 to 16 hexadecimal characters"
+            )
+        reality["short_id"] = short_id
+        utls = tls.get("utls")
+        allowed_fingerprints = {
+            "chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android"
+        }
+        if not isinstance(utls, dict) or utls.get("enabled") is not True:
+            raise RouteError(f"{label}.tls.utls.enabled must be true")
+        fingerprint = str(utls.get("fingerprint") or "").strip().lower()
+        if fingerprint not in allowed_fingerprints:
+            raise RouteError(f"{label}.tls.utls.fingerprint is not approved")
+        utls["fingerprint"] = fingerprint
+        outbound["network"] = "tcp"
     return outbound, ALLOWED_PROTOCOLS[protocol], node_ip, node_ports
 
 
@@ -151,9 +213,12 @@ def normalize(spec: dict, subscription: dict) -> dict:
     disaster_ip = public_ipv4(disaster_raw, "disaster_exit_ipv4") if disaster_raw else ""
     if disaster_ip == primary_ip:
         raise RouteError("disaster_exit_ipv4 must differ from expected_exit_ipv4")
-    threshold = int(spec.get("failure_threshold") or 3)
+    threshold = int(spec.get("failure_threshold") or 2)
     if not 1 <= threshold <= 10:
         raise RouteError("failure_threshold must be between 1 and 10")
+    recovery_threshold = int(spec.get("recovery_threshold") or 5)
+    if not 1 <= recovery_threshold <= 20:
+        raise RouteError("recovery_threshold must be between 1 and 20")
 
     outbounds = subscription.get("outbounds")
     if not isinstance(outbounds, list):
@@ -229,6 +294,7 @@ def normalize(spec: dict, subscription: dict) -> dict:
         "expected_exit_ipv4": primary_ip,
         "disaster_exit_ipv4": disaster_ip,
         "failure_threshold": threshold,
+        "recovery_threshold": recovery_threshold,
         "selector_tag": f"company-{route_key}-selector",
         "candidates": candidates,
     }
@@ -238,7 +304,7 @@ def metadata(route: dict) -> dict:
     keys = (
         "version", "route_key", "country_code", "proxy_id", "socks_port",
         "api_port", "expected_exit_ipv4", "disaster_exit_ipv4",
-        "failure_threshold", "selector_tag",
+        "failure_threshold", "recovery_threshold", "selector_tag",
     )
     candidate_keys = (
         "tag", "source_tag", "role", "priority", "probe_port",
@@ -365,12 +431,15 @@ def candidate_healthy(candidate: dict, country: str) -> bool:
 def failover(route_key: str) -> None:
     route, secret = installed_route(route_key)
     current = str(clash(route, secret, "GET").get("now") or "block")
-    health = {
-        item["tag"]: candidate_healthy(item, route["country_code"])
-        for item in route["candidates"]
-    }
+    candidates = route["candidates"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+        checks = {
+            item["tag"]: executor.submit(candidate_healthy, item, route["country_code"])
+            for item in candidates
+        }
+        health = {tag: future.result() for tag, future in checks.items()}
     best = next((item["tag"] for item in route["candidates"] if health[item["tag"]]), None)
-    state_dir = Path("/var/lib/sub2api-route-control")
+    state_dir = STATE_ROOT
     state_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
     state_path = state_dir / f"{route_key}.json"
     try:
@@ -378,6 +447,10 @@ def failover(route_key: str) -> None:
     except (OSError, json.JSONDecodeError):
         state = {}
     failures = int(state.get("consecutive_failures") or 0)
+    recovery_candidate = str(state.get("recovery_candidate") or "")
+    recoveries = int(state.get("consecutive_recoveries") or 0)
+    failure_threshold = int(route.get("failure_threshold") or 2)
+    recovery_threshold = int(route.get("recovery_threshold") or 5)
 
     if current == "block":
         if best is None:
@@ -385,28 +458,45 @@ def failover(route_key: str) -> None:
         else:
             clash(route, secret, "PUT", {"name": best})
             current, failures = best, 0
+        recovery_candidate, recoveries = "", 0
     elif health.get(current, False):
         failures = 0
         if best is not None and best != current:
-            clash(route, secret, "PUT", {"name": best})
-            current = best
+            if recovery_candidate == best:
+                recoveries += 1
+            else:
+                recovery_candidate, recoveries = best, 1
+            if recoveries >= recovery_threshold:
+                clash(route, secret, "PUT", {"name": best})
+                current = best
+                recovery_candidate, recoveries = "", 0
+        else:
+            recovery_candidate, recoveries = "", 0
     else:
+        recovery_candidate, recoveries = "", 0
         failures += 1
-        if failures >= int(route["failure_threshold"]):
+        if failures >= failure_threshold:
             target = best or "block"
             if target != current:
                 clash(route, secret, "PUT", {"name": target})
             current = target
-            if best is not None:
-                failures = 0
+            failures = 0
 
-    state_path.write_text(
-        json.dumps({"current": current, "consecutive_failures": failures}, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
+    state_value = {
+        "current": current,
+        "consecutive_failures": failures,
+        "recovery_candidate": recovery_candidate,
+        "consecutive_recoveries": recoveries,
+    }
+    temporary = state_path.with_suffix(".json.new")
+    temporary.write_text(json.dumps(state_value, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.chmod(0o640)
+    os.replace(temporary, state_path)
     state_path.chmod(0o640)
-    print(f"route={route_key} selector={current} failures={failures}")
+    print(
+        f"route={route_key} selector={current} failures={failures} "
+        f"recovery_candidate={recovery_candidate or '-'} recoveries={recoveries}"
+    )
     if current == "block" or not health.get(current, False):
         raise RouteError("route remains fail-closed while no selected candidate is healthy")
 
