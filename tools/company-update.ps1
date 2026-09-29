@@ -7,6 +7,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$codexReleaseHelper = Join-Path $PSScriptRoot 'company-codex-release.ps1'
+if (-not (Test-Path -LiteralPath $codexReleaseHelper -PathType Leaf)) {
+    throw 'Codex release candidate helper is missing.'
+}
+. $codexReleaseHelper
+
 function Invoke-Checked {
     param([string]$Command, [string[]]$Arguments)
     & $Command @Arguments
@@ -42,29 +48,9 @@ if ((Get-CheckedOutput git @('rev-parse', 'HEAD')) -ne
     (Get-CheckedOutput git @('rev-parse', "origin/$companyBranch"))) {
     throw 'Local company/egress-v1 must exactly match origin before updating.'
 }
-if ((Get-CheckedOutput git @('rev-parse', 'main')) -ne
-    (Get-CheckedOutput git @('rev-parse', 'origin/main'))) {
-    throw 'Local main must exactly match origin before updating.'
-}
-
-Invoke-Checked git @('fetch', 'upstream', '--tags')
-$targetSha = Get-CheckedOutput git @('rev-parse', '--verify', "$UpstreamRef`^{commit}")
-$baseline = 'e8cb019fabf8b55199436229044cbf9aa7a82564'
-& git merge-base --is-ancestor $baseline $targetSha
-if ($LASTEXITCODE -ne 0) { throw 'Target is not a descendant of the frozen Company V1 baseline.' }
-
-$tempBranch = 'company/upgrade-{0}-{1}' -f $targetSha.Substring(0, 12), [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-Invoke-Checked git @('switch', '-c', $tempBranch)
-try {
-    Invoke-Checked git @('merge', '--no-edit', $targetSha)
-    $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' }
-    Invoke-Checked $python @('tools/check_company_egress_guard.py')
-    $companyCommit = Get-CheckedOutput git @('rev-parse', 'HEAD')
-    Invoke-Checked git @('push', 'origin', $tempBranch)
-}
-catch {
-    Write-Warning 'Upgrade stopped without force push or automatic reset. Inspect the current temporary branch.'
-    throw
+if ((Get-CheckedOutput git @('rev-parse', 'origin/main')) -ne
+    (Get-CheckedOutput git @('rev-parse', "origin/$companyBranch"))) {
+    throw 'origin/main must exactly mirror origin/company/egress-v1 before updating.'
 }
 
 $credentialLines = "protocol=https`nhost=github.com`n`n" | git credential fill
@@ -82,6 +68,74 @@ $headers = @{
     'User-Agent'     = 'Sub2API-Company-Update'
 }
 $repoApi = 'https://api.github.com/repos/Ye-0050101/sub2api-company'
+
+if ($UpstreamRef -notmatch '^v(?<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+    throw 'UpstreamRef must be an exact official stable tag such as v0.2.9.'
+}
+$upstreamVersion = $Matches.version
+Invoke-Checked git @('fetch', 'upstream', '--tags')
+$targetSha = Get-CheckedOutput git @('rev-parse', '--verify', "$UpstreamRef`^{commit}")
+$officialTagSha = Get-CheckedOutput git @('rev-parse', '--verify', "refs/tags/$UpstreamRef`^{commit}")
+if ($targetSha -ne $officialTagSha) {
+    throw 'UpstreamRef did not resolve to the fetched official tag.'
+}
+& git merge-base --is-ancestor $targetSha upstream/main
+if ($LASTEXITCODE -ne 0) { throw 'Official tag is not contained in upstream/main.' }
+$baseline = 'e8cb019fabf8b55199436229044cbf9aa7a82564'
+& git merge-base --is-ancestor $baseline $targetSha
+if ($LASTEXITCODE -ne 0) { throw 'Target is not a descendant of the frozen Company V1 baseline.' }
+
+# Discover the official Codex CLI version before creating or pushing any
+# upgrade branch. This value is evidence for operator review only: it is not
+# applied to the server or to the runtime manual-version setting.
+try {
+    $codexCandidate = Get-LatestCodexStableReleaseCandidate -Headers $headers
+}
+catch {
+    throw 'Codex candidate discovery failed; the controlled Sub2API update was not started and latest.json was not changed.'
+}
+Write-Host ("Codex candidate discovered: {0} ({1}, source={2})" -f
+    $codexCandidate.Version, $codexCandidate.Tag, $codexCandidate.DiscoverySource)
+Write-Host "Codex candidate release: $($codexCandidate.Url)"
+Write-Host 'Candidate only; no server or runtime setting will be changed.'
+$codexCandidateDiscoveredAt = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+$tempBranch = 'company/upgrade-{0}-{1}' -f $targetSha.Substring(0, 12), [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+Invoke-Checked git @('switch', '-c', $tempBranch)
+try {
+    Invoke-Checked git @('merge', '--no-edit', $targetSha)
+    $candidateRecordPath = Join-Path $repoRoot '.company/codex-candidate.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $candidateRecordPath) | Out-Null
+    $candidateRecord = [ordered]@{
+        schema_version      = 1
+        source_repository  = 'openai/codex'
+        version            = $codexCandidate.Version
+        tag                = $codexCandidate.Tag
+        url                = $codexCandidate.Url
+        upstream_commit    = $targetSha
+        discovered_at_utc  = $codexCandidateDiscoveredAt
+    }
+    $candidateJSON = $candidateRecord | ConvertTo-Json
+    [IO.File]::WriteAllText(
+        $candidateRecordPath,
+        $candidateJSON + [Environment]::NewLine,
+        [Text.UTF8Encoding]::new($false)
+    )
+    Invoke-Checked git @('add', '--', '.company/codex-candidate.json')
+    Invoke-Checked git @(
+        '-c', 'commit.gpgSign=false', 'commit',
+        '-m', "chore(company): record Codex candidate $($codexCandidate.Version)"
+    )
+    $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' }
+    Invoke-Checked $python @('tools/check_company_egress_guard.py')
+    $companyCommit = Get-CheckedOutput git @('rev-parse', 'HEAD')
+    Invoke-Checked git @('push', 'origin', $tempBranch)
+}
+catch {
+    Write-Warning 'Upgrade stopped without force push or automatic reset. Inspect the current temporary branch.'
+    throw
+}
+
 function Wait-CompanyChecks {
     param(
         [Parameter(Mandatory = $true)][string]$Branch,
@@ -265,12 +319,13 @@ catch {
     throw
 }
 
-# Publish the three verified commit IDs explicitly. Never publish an
-# unverified local branch tip; the atomic non-force push also rejects races.
+# The company fork's main branch mirrors the verified Company branch. The raw
+# official baseline remains traceable through upstream_commit and the upstream
+# remote; publishing raw upstream code on main would drop Company enforcement.
 try {
     Invoke-Checked git @(
         'push', '--atomic', 'origin',
-        ('{0}:refs/heads/main' -f $targetSha),
+        ('{0}:refs/heads/main' -f $companyCommit),
         ('{0}:refs/heads/{1}' -f $companyCommit, $companyBranch),
         ('{0}:refs/heads/{1}' -f $ubuntuCommit, $ubuntuBranch)
     )
@@ -284,7 +339,7 @@ catch {
 # publication if a local checkout cannot be refreshed.
 try {
     Invoke-Checked git @('switch', 'main')
-    Invoke-Checked git @('merge', '--ff-only', $targetSha)
+    Invoke-Checked git @('merge', '--ff-only', $tempBranch)
     Invoke-Checked git @('switch', $companyBranch)
     Invoke-Checked git @('merge', '--ff-only', $tempBranch)
     Invoke-Checked git @('switch', $ubuntuBranch)
@@ -315,7 +370,16 @@ if ($LASTEXITCODE -ne 0) {
     Write-Warning 'Verified temporary remote branches could not be removed; official refs remain valid.'
 }
 
+$companyVersion = (Get-Content -LiteralPath (Join-Path $repoRoot 'COMPANY_VERSION') -Raw).Trim()
+if ($companyVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw 'COMPANY_VERSION must contain one major.minor.patch version.'
+}
 $manifest = [ordered]@{
+    company_version = $companyVersion
+    upstream_version = $upstreamVersion
+    codex_candidate_version = $codexCandidate.Version
+    codex_candidate_tag = $codexCandidate.Tag
+    codex_candidate_url = $codexCandidate.Url
     company_commit  = $companyCommit
     upstream_commit = $targetSha
     binary_sha256   = $binarySha
@@ -341,4 +405,5 @@ Write-Host "Operations manifest SHA256: $opsManifestSha"
 Write-Host "Ubuntu 22.04 branch verified and updated: $ubuntuCommit"
 Write-Host "Ubuntu 22.04 binary: $ubuntuBinaryPath"
 Write-Host "Ubuntu 22.04 SHA256: $ubuntuBinarySha"
+Write-Host "Codex candidate recorded (not applied): $($codexCandidate.Version)"
 Write-Host 'No server operation was performed.'

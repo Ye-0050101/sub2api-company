@@ -53,9 +53,10 @@ func ProvideCompanyOpenAIQuotaService(
 	proxyRepo ProxyRepository,
 	tokenProvider *OpenAITokenProvider,
 	privacyClientFactory PrivacyClientFactory,
+	referralClient OpenAIReferralClient,
 	openAIGatewayService *OpenAIGatewayService,
 ) *OpenAIQuotaService {
-	svc := ProvideOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, openAIGatewayService)
+	svc := ProvideOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, referralClient, openAIGatewayService)
 	svc.SetManagedProxyResolver(openAIGatewayService.managedProxyResolver)
 	return svc
 }

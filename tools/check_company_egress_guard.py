@@ -226,6 +226,8 @@ REQUIRED_SOURCE = {
         "--confirm-first-install",
         "bundle SHA256 mismatch",
         "binary SHA256 mismatch",
+        "socks5h://127.0.0.1:",
+        "allow_direct_on_error",
         "for companion in company-activate-egress.sh company-postgresql16.sh companyctl.py company-route.py company-route-apply.sh; do",
         "/usr/local/sbin/company-activate-egress",
         "/usr/local/sbin/companyctl",
@@ -291,6 +293,7 @@ REQUIRED_SOURCE = {
     "deploy/company-route-apply.sh": (
         "route core policy is immutable",
         "sub2api_route_control_guard",
+        'cfg.setdefault("update", {})["proxy_url"]',
         "allow_direct_on_error",
         "Route activation failed; restoring the previous application state",
         'readlink -f "$route_tool"',
@@ -298,6 +301,8 @@ REQUIRED_SOURCE = {
     ),
     "deploy/company-verify-egress.sh": (
         "/etc/sub2api-egress/routes/*/metadata.json",
+        "Codex update proxy fail-closed",
+        "socks5h://127.0.0.1:{port}",
         "expected_disaster",
         "sub2api-route-$route_key-failover.timer",
         "probe_managed_route",
@@ -313,6 +318,7 @@ REQUIRED_SOURCE = {
         "DATABASE_BACKUP_SHA256=",
         "new_binary_may_have_migrated=1",
         "Sub2API remains stopped",
+        'cfg.setdefault("update", {})["proxy_url"]',
     ),
     "tools/company-update.ps1": (
         "Company operations SHA256SUMS is missing.",
@@ -466,6 +472,10 @@ REQUIRED_SOURCE = {
     ),
     "backend/internal/service/openai_plugin_transport.go": (
         "!managedEgress",
+    ),
+    "backend/internal/service/wire.go": (
+        "len(cfg.CompanyEgress.ManagedProxies) == 0",
+        "manager.SetAccountDirectory(gateway)",
     ),
     "backend/internal/service/gateway_websearch_emulation.go": (
         "len(s.cfg.CompanyEgress.ManagedProxies) > 0",
