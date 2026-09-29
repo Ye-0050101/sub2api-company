@@ -189,8 +189,8 @@ class CompanyCtlTest(unittest.TestCase):
 
     def test_candidate_defaults_match_company_priority_plan(self):
         self.assertEqual(companyctl.default_candidate_priority("primary", "tuic"), 10)
-        self.assertEqual(companyctl.default_candidate_priority("disaster", "vless"), 20)
-        self.assertEqual(companyctl.default_candidate_priority("primary", "anytls"), 30)
+        self.assertEqual(companyctl.default_candidate_priority("primary", "anytls"), 20)
+        self.assertEqual(companyctl.default_candidate_priority("disaster", "vless"), 30)
         self.assertEqual(companyctl.default_candidate_priority("primary", "hysteria2"), 40)
 
     def test_route_replace_preserves_proxy_and_local_ports(self):

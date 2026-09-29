@@ -169,7 +169,7 @@
 bootstrap会把activate入口安装到 `/usr/local/sbin`，避免首次安装依赖当前工作目录。
 当受管 `us-a` Route 存在时，Company 配置把 `update.proxy_url` 收敛为该 Route 的本机 `socks5h` 入口；`security.proxy_fallback.allow_direct_on_error` 固定为 `false`。版本查询失败沿用已保存值，不回退公网直连，也不自动覆盖管理员手工版本。
 
-Route 运维入口支持 `companyctl route replace <route-key>`：保持 ProxyID、SOCKS/API端口、国家和账号绑定不变，只原子替换 sing-box 候选协议、节点与优先级。替换前校验 VLESS+REALITY Vision、TLS、固定公网IPv4、端口和防火墙；替换失败恢复旧 Route 与应用配置。运行期候选并行探测，连续失败2次降级、连续恢复5次回切，全部不可用时选择 BLOCK。
+Route 运维入口支持 `companyctl route replace <route-key>`：保持 ProxyID、SOCKS/API端口、国家和账号绑定不变，只原子替换 sing-box 候选协议、节点与优先级。替换前校验 VLESS+REALITY Vision、TLS、固定公网IPv4、端口和防火墙；替换失败恢复旧 Route 与应用配置。运行期候选并行探测，连续失败2次降级、连续恢复5次回切，全部不可用时选择 BLOCK。美国线路默认优先级为同IP的 TUIC、AnyTLS，然后才切到不同IP的VLESS灾备，HY2保留为最后一个受控协议候选。
 
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
