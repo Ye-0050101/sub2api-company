@@ -17,14 +17,14 @@
       "probe_port": 11001
     },
     {
-      "subscription_tag": "us-b-vless",
-      "role": "disaster",
+      "subscription_tag": "us-a-anytls",
+      "role": "primary",
       "priority": 20,
       "probe_port": 11002
     },
     {
-      "subscription_tag": "us-a-anytls",
-      "role": "primary",
+      "subscription_tag": "us-b-vless",
+      "role": "disaster",
       "priority": 30,
       "probe_port": 11003
     },

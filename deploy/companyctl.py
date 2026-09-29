@@ -311,8 +311,8 @@ def build_group(role: str) -> list[dict]:
 def default_candidate_priority(role: str, protocol: str) -> int:
     planned = {
         ("primary", "tuic"): 10,
-        ("disaster", "vless"): 20,
-        ("primary", "anytls"): 30,
+        ("primary", "anytls"): 20,
+        ("disaster", "vless"): 30,
         ("primary", "hysteria2"): 40,
         ("primary", "vless"): 50,
         ("disaster", "tuic"): 110,
