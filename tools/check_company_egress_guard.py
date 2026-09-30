@@ -374,6 +374,7 @@ REQUIRED_SOURCE = {
         "repository.NewCompanyManagedProxyHealth(",
         "repository.NewCompanyProxyRepository(",
         "service.ProvideCompanyOAuthService(",
+        "service.ProvideCompanyClaudeResetCreditService(",
         "service.ProvideCompanyOpenAIOAuthService(",
         "service.ProvideCompanyGrokOAuthService(",
         "service.ProvideCompanyAntigravityOAuthService(",
@@ -382,6 +383,10 @@ REQUIRED_SOURCE = {
         "service.ProvideCompanyAccountUsageService(",
         "repository.ProvideCompanyGrokOAuthClient(",
         "repository.CreateCompanyPrivacyReqClient",
+    ),
+    "backend/internal/service/claude_reset_credits.go": (
+        "SetManagedProxyResolver",
+        "managedProxyResolver.ResolveForAccount",
     ),
     "backend/internal/repository/company_managed_proxy_health.go": (
         'companyProbeAInternationalURL = "https://api.ipify.org?format=json"',

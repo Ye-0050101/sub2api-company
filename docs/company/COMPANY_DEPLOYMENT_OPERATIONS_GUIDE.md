@@ -2,7 +2,7 @@
 
 > 适用范围：Company Egress V1。本文以仓库现有脚本和代码为准，不把规划中的能力写成已经实现。
 >
-> 当前实现已跟进官方 Sub2API v0.2.9，并维护两个安装分支：Ubuntu 24.04 使用 `company/egress-v1`；Ubuntu 22.04 使用 `company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以 `dist/company/latest.json` 记录的提交和制品为准，不以本文中的示例值判断。
+> 当前实现已跟进官方 Sub2API v0.2.11，并维护两个安装分支：默认Linux制品使用`company/egress-v1`；Ubuntu 22.04使用`company/egress-v1-ubuntu22.04`。运行安装脚本前必须选择与目标服务器一致的分支。后续版本以`dist/company/latest.json`记录的提交和制品为准，不以本文中的示例值判断。
 >
 > 本轮新增入口管理的说明基于本地代码；未进行服务器实机部署、备份恢复或回滚验收。以下命令和检查表是操作要求，不代表目标服务器已通过验收。
 
