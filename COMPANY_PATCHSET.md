@@ -171,6 +171,8 @@ bootstrap会把activate入口安装到 `/usr/local/sbin`，避免首次安装依
 
 Route 运维入口支持 `companyctl route replace <route-key>`：保持 ProxyID、SOCKS/API端口、国家和账号绑定不变，只原子替换 sing-box 候选协议、节点与优先级。替换前校验 VLESS+REALITY Vision、TLS、固定公网IPv4、端口和防火墙；替换失败恢复旧 Route 与应用配置。运行期候选并行探测，连续失败2次降级、连续恢复5次回切，全部不可用时选择 BLOCK。美国线路默认优先级为同IP的 TUIC、AnyTLS，然后才切到不同IP的VLESS灾备，HY2保留为最后一个受控协议候选。
 
+`companyctl route remove <route-key>` 用于退役未绑定账号的非控制Route。它拒绝删除 `us-a`，同时检查全部账号引用和备用代理引用；操作前备份Route、Company配置、防火墙、systemd和选择状态，随后从托管策略与端口白名单移除Route、软删除代理记录并清理独立服务。任一步失败自动恢复原状态。
+
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
 本机更新命令：

@@ -460,6 +460,31 @@ def route_replace(route_key: str) -> None:
     activate_route(spec, outbounds, replace=True)
 
 
+def route_remove(route_key: str) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,15}", route_key):
+        raise CompanyCtlError("invalid route key")
+    if route_key == "us-a":
+        raise CompanyCtlError("the us-a control route cannot be removed")
+    metadata_path = ROUTES / route_key / "metadata.json"
+    if not metadata_path.is_file():
+        raise CompanyCtlError(f"managed route {route_key} does not exist")
+    route = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if str(route.get("route_key") or "") != route_key:
+        raise CompanyCtlError("installed route metadata identity is inconsistent")
+    print(
+        "Removing managed route: "
+        f"route={route_key} country={route.get('country_code')} "
+        f"proxy_id={route.get('proxy_id')} socks=127.0.0.1:{route.get('socks_port')}"
+    )
+    confirmation = prompt(f"Type {route_key} to confirm removal")
+    if confirmation != route_key:
+        raise CompanyCtlError("route removal confirmation did not match")
+    subprocess.run(
+        ["/usr/local/sbin/company-route-remove", route_key],
+        check=True,
+    )
+
+
 def route_list() -> None:
     if not ROUTES.is_dir():
         print("No managed international routes")
@@ -767,6 +792,8 @@ def main() -> int:
     route_sub.add_parser("list")
     replace = route_sub.add_parser("replace")
     replace.add_argument("route_key")
+    remove = route_sub.add_parser("remove")
+    remove.add_argument("route_key")
     verify_parser = sub.add_parser("verify")
     verify_parser.add_argument("--sha256", default="", help="expected release hash, not the currently installed hash")
     sub.add_parser("status")
@@ -789,6 +816,8 @@ def main() -> int:
             route_add()
         elif args.command == "route" and args.route_command == "replace":
             route_replace(args.route_key)
+        elif args.command == "route" and args.route_command == "remove":
+            route_remove(args.route_key)
         elif args.command == "route":
             route_list()
         elif args.command == "verify":

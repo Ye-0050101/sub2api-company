@@ -179,6 +179,8 @@ A.IP == optional disaster_exit_ipv4
 
 Route replacement 必须保持 `route_key`、`country_code`、`proxy_id`、本机 SOCKS 端口和本机控制端口不变。新配置通过 sing-box 与 nftables 预检查后才能进入维护切换；失败必须恢复旧 Route、Company 配置、选择状态和服务。节点凭据不得写入 metadata、日志或数据库。
 
+Route removal 仅允许未被任何账号或备用代理引用的非 `us-a` Route。删除必须先备份并原子更新Company策略与Sub2API UID本机端口白名单，停止并清理对应的timer、egress、guard、nftables表和Route目录；代理数据库记录使用soft delete保留审计。删除失败必须恢复Route、代理状态、应用配置、防火墙和服务。
+
 - startup preflight：所有配置 Proxy 必须先通过
 - periodic probe interval：60 秒
 - health TTL：120 秒

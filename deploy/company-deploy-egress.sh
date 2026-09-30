@@ -29,7 +29,7 @@ actual_sha=$(sha256sum "$binary" | awk '{print $1}')
 version_output=$("$binary" -version 2>&1 || true)
 grep -Fq "company-" <<<"$version_output" || { echo "Refusing: binary is not a Company build" >&2; exit 1; }
 
-required_ops=(company-deploy-egress company-verify-egress company-route company-route-add companyctl)
+required_ops=(company-deploy-egress company-verify-egress company-route company-route-add company-route-remove companyctl)
 if [[ -n $ops_dir || -n $ops_manifest_sha ]]; then
   [[ $ops_dir == /* && -d $ops_dir && -n $ops_manifest_sha ]] || {
     echo "Refusing: --ops-dir and --ops-sha256 must be supplied together" >&2
@@ -62,7 +62,7 @@ if [[ -n $ops_dir || -n $ops_manifest_sha ]]; then
     echo "Refusing: operations file SHA256 mismatch" >&2
     exit 1
   }
-  bash -n "$ops_dir/company-deploy-egress" "$ops_dir/company-verify-egress" "$ops_dir/company-route-add"
+  bash -n "$ops_dir/company-deploy-egress" "$ops_dir/company-verify-egress" "$ops_dir/company-route-add" "$ops_dir/company-route-remove"
   python3 - "$ops_dir/company-route" <<'PY'
 from pathlib import Path
 import sys

@@ -22,6 +22,7 @@ jobs:
           /bin/bash -n deploy/company-install-fresh.sh
           /bin/bash -n deploy/company-postgresql16.sh
           /bin/bash -n deploy/company-route-apply.sh
+          /bin/bash -n deploy/company-route-remove.sh
           python3 deploy/tests/company-route-test.py
           python3 deploy/tests/companyctl-test.py
           python3 -m json.tool deploy/company-route.example.json >/dev/null
@@ -189,10 +190,11 @@ jobs:
           install -m 0755 ../deploy/company-verify-egress.sh ../dist/company-ops/company-verify-egress
           install -m 0755 ../deploy/company-route.py ../dist/company-ops/company-route
           install -m 0755 ../deploy/company-route-apply.sh ../dist/company-ops/company-route-add
+          install -m 0755 ../deploy/company-route-remove.sh ../dist/company-ops/company-route-remove
           install -m 0755 ../deploy/companyctl.py ../dist/company-ops/companyctl
           (
             cd ../dist/company-ops
-            sha256sum company-deploy-egress company-verify-egress company-route company-route-add companyctl > SHA256SUMS
+            sha256sum company-deploy-egress company-verify-egress company-route company-route-add company-route-remove companyctl > SHA256SUMS
           )
       - name: Upload verified company website binary
         uses: actions/upload-artifact@v7

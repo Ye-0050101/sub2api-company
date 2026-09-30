@@ -122,7 +122,7 @@ $opsManifest = Join-Path $ops 'SHA256SUMS'
 $actualOpsSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $opsManifest).Hash.ToLowerInvariant()
 if ($actualOpsSha -ne $expectedOpsSha) { throw 'Operations manifest SHA256 does not match latest.json' }
 
-$requiredOps = @('company-deploy-egress', 'company-verify-egress', 'company-route', 'company-route-add', 'companyctl')
+$requiredOps = @('company-deploy-egress', 'company-verify-egress', 'company-route', 'company-route-add', 'company-route-remove', 'companyctl')
 $actualFiles = @(Get-ChildItem -LiteralPath $ops | ForEach-Object Name | Sort-Object)
 $expectedFiles = @($requiredOps + 'SHA256SUMS' | Sort-Object)
 if (Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles) {
@@ -188,6 +188,7 @@ chmod 0755 \
   "$release/company-ops/company-verify-egress" \
   "$release/company-ops/company-route" \
   "$release/company-ops/company-route-add" \
+  "$release/company-ops/company-route-remove" \
   "$release/company-ops/companyctl"
 test "$(sha256sum "$release/sub2api-linux-amd64" | awk '{print $1}')" = "$expected_binary_sha"
 test "$(sha256sum "$release/company-ops/SHA256SUMS" | awk '{print $1}')" = "$expected_ops_sha"
