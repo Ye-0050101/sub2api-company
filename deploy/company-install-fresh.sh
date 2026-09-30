@@ -34,7 +34,7 @@ require_var() { [[ -n ${!1:-} ]] || die "missing $1 in $env_file"; }
 "$binary" -version 2>&1 | grep -Fq "company-" || die "binary is not a Company build"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-for required in company-activate-egress.sh company-deploy-egress.sh companyctl.py company-verify-egress.sh company-route.py company-route-apply.sh
+for required in company-activate-egress.sh company-deploy-egress.sh companyctl.py company-verify-egress.sh company-route.py company-route-apply.sh company-route-remove.sh
 do
   [[ -f $script_dir/$required ]] || die "$required must be next to installer"
 done
@@ -227,6 +227,7 @@ install -o root -g root -m 0755 "$script_dir/company-deploy-egress.sh"   /usr/lo
 install -o root -g root -m 0755 "$script_dir/company-verify-egress.sh"   /usr/local/sbin/company-verify-egress
 install -o root -g root -m 0755 "$script_dir/company-route.py"   /usr/local/sbin/company-route
 install -o root -g root -m 0755 "$script_dir/company-route-apply.sh"   /usr/local/sbin/company-route-add
+install -o root -g root -m 0755 "$script_dir/company-route-remove.sh"   /usr/local/sbin/company-route-remove
 install -o root -g root -m 0755 "$script_dir/company-install-fresh.sh"   /usr/local/sbin/company-install-fresh
 install -o root -g root -m 0755 "$script_dir/companyctl.py"   /usr/local/sbin/companyctl
 

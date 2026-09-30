@@ -217,6 +217,33 @@ class CompanyCtlTest(unittest.TestCase):
             payload.assert_called_once_with("us-a", "US", 10, 11000, 19000, "8.8.8.8", "1.1.1.1")
             activate.assert_called_once_with({"version": 1}, [], replace=True)
 
+    def test_route_remove_requires_exact_confirmation_and_never_removes_us_a(self):
+        existing = {
+            "route_key": "sg-a",
+            "country_code": "SG",
+            "proxy_id": 20,
+            "socks_port": 12000,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            routes = Path(tmp)
+            route = routes / "sg-a"
+            route.mkdir()
+            (route / "metadata.json").write_text(json.dumps(existing))
+            with mock.patch.object(companyctl, "ROUTES", routes), \
+                 mock.patch("builtins.input", return_value="sg-a"), \
+                 mock.patch.object(companyctl.subprocess, "run") as run, \
+                 mock.patch("sys.stdout", new_callable=io.StringIO):
+                companyctl.route_remove("sg-a")
+            run.assert_called_once_with(
+                ["/usr/local/sbin/company-route-remove", "sg-a"], check=True
+            )
+            with mock.patch.object(companyctl, "ROUTES", routes), \
+                 mock.patch("builtins.input", return_value="wrong"), \
+                 self.assertRaisesRegex(companyctl.CompanyCtlError, "confirmation"):
+                companyctl.route_remove("sg-a")
+        with self.assertRaisesRegex(companyctl.CompanyCtlError, "control route"):
+            companyctl.route_remove("us-a")
+
     def test_operations_keep_exact_probe_and_verified_backup_policy(self):
         install = (ROOT / "deploy" / "company-install-fresh.sh").read_text()
         activate = (ROOT / "deploy" / "company-activate-egress.sh").read_text()
@@ -265,6 +292,10 @@ class CompanyCtlTest(unittest.TestCase):
         self.assertIn("--replace) replace_mode=1", apply)
         self.assertIn("route replacement must preserve", apply)
         self.assertIn("ROUTE_REPLACED route=", apply)
+        remove = (ROOT / "deploy" / "company-route-remove.sh").read_text()
+        self.assertIn("ROUTE_REMOVED route=", remove)
+        self.assertIn("Route removal failed; restoring", remove)
+        self.assertIn("UPDATE proxies SET status='inactive',deleted_at=NOW()", remove)
 
 
 if __name__ == "__main__":

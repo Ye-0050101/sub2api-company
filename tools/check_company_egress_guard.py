@@ -42,6 +42,7 @@ SERVER_OPERATION_SCRIPTS = (
     "deploy/company-install-fresh.sh",
     "deploy/companyctl.py",
     "deploy/company-route-apply.sh",
+    "deploy/company-route-remove.sh",
     "deploy/company-route.py",
 )
 
@@ -227,10 +228,11 @@ REQUIRED_SOURCE = {
         "binary SHA256 mismatch",
         "socks5h://127.0.0.1:",
         "allow_direct_on_error",
-        "for companion in company-activate-egress.sh companyctl.py company-route.py company-route-apply.sh; do",
+        "for companion in company-activate-egress.sh companyctl.py company-route.py company-route-apply.sh company-route-remove.sh; do",
         "/usr/local/sbin/company-activate-egress",
         "/usr/local/sbin/companyctl",
         "/usr/local/sbin/company-route-add",
+        "/usr/local/sbin/company-route-remove",
     ),
     "deploy/company-activate-egress.sh": (
         "COMPANY_CN_DNS_IPV4_1",
@@ -295,6 +297,13 @@ REQUIRED_SOURCE = {
         'readlink -f "$route_tool"',
         'die() { echo "REFUSING: $*" >&2; return 1; }',
     ),
+    "deploy/company-route-remove.sh": (
+        "the us-a control route cannot be removed",
+        "is still referenced by",
+        "Route removal failed; restoring the previous route and application state",
+        "allow_direct_on_error",
+        "ROUTE_REMOVED route=",
+    ),
     "deploy/company-verify-egress.sh": (
         "/etc/sub2api-egress/routes/*/metadata.json",
         "Codex update proxy fail-closed",
@@ -307,7 +316,7 @@ REQUIRED_SOURCE = {
     "deploy/company-deploy-egress.sh": (
         "--ops-dir",
         "operations manifest SHA256 mismatch",
-        "required_ops=(company-deploy-egress company-verify-egress company-route company-route-add companyctl)",
+        "required_ops=(company-deploy-egress company-verify-egress company-route company-route-add company-route-remove companyctl)",
         "restoring previous binary, config, and operations tools",
         "pg_restore --list",
         "DATABASE_BACKUP_SHA256=",

@@ -204,7 +204,8 @@ $requiredOps = @(
     'company-deploy-egress',
     'company-verify-egress',
     'company-route',
-    'company-route-add'
+    'company-route-add',
+    'company-route-remove'
     'companyctl'
 )
 if (-not (Test-Path -LiteralPath $opsManifestPath -PathType Leaf)) {
