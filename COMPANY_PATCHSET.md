@@ -173,6 +173,8 @@ Route 运维入口支持 `companyctl route replace <route-key>`：保持 ProxyID
 
 `companyctl route remove <route-key>` 用于退役未绑定账号的非控制Route。它拒绝删除 `us-a`，同时检查全部账号引用和备用代理引用；操作前备份Route、Company配置、防火墙、systemd和选择状态，随后从托管策略与端口白名单移除Route、软删除代理记录并清理独立服务。任一步失败自动恢复原状态。
 
+基于官方Sub2API v0.2.11的Company v1.4.0继续保留上述出口约束。官方新增的Claude原生限额重置查询与兑换在Company构建中通过`ManagedProxyResolver`解析账号代理；代理缺失、不健康或策略不匹配时失败关闭，不允许该新增管理功能绕过托管出口。官方新增API Key创建限制和余额在途预占保持官方默认值。
+
 Company CI 构建显式注入 `main.BuildType=company`。生产 Company binary 禁止使用 Sub2API 内置更新/回退接口；更新官方源码、生成 artifact、服务器部署和回滚只能走上述职责分离入口。
 
 本机更新命令：

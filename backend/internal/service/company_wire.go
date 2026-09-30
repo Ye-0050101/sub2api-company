@@ -15,6 +15,20 @@ func ProvideCompanyOAuthService(
 	return svc
 }
 
+func ProvideCompanyClaudeResetCreditService(
+	accounts AccountRepository,
+	tokens *ClaudeTokenProvider,
+	proxies ProxyRepository,
+	settings *SettingService,
+	idem *IdempotencyCoordinator,
+	locks LeaderLockCache,
+	resolver ManagedProxyResolver,
+) *ClaudeResetCreditService {
+	svc := ProvideClaudeResetCreditService(accounts, tokens, proxies, settings, idem, locks)
+	svc.SetManagedProxyResolver(resolver)
+	return svc
+}
+
 func ProvideCompanyOpenAIOAuthService(
 	proxyRepo ProxyRepository,
 	oauthClient OpenAIOAuthClient,

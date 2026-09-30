@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "source_repository": "openai/codex",
-  "version": "0.158.0",
-  "tag": "rust-v0.158.0",
-  "url": "https://github.com/openai/codex/releases/tag/rust-v0.158.0",
-  "upstream_commit": "4c00df2e0183e2c70b7fa8ba45914205e36aad0c",
-  "discovered_at_utc": "2026-09-28T00:00:00Z"
+  "version": "0.159.2",
+  "tag": "rust-v0.159.2",
+  "url": "https://github.com/openai/codex/releases/tag/rust-v0.159.2",
+  "upstream_commit": "96f4c115c9749078f90cbf210a01d39baf3f53b6",
+  "discovered_at_utc": "2026-09-30T12:30:23Z"
 }

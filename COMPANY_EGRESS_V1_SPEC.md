@@ -197,7 +197,7 @@ DNS fail-closed 由 application no-pre-resolution、Guard、approved resolver �
 ## 10. HTTP、OAuth 与 WebSocket
 
 - HTTP 主路径由 CompanyHTTPUpstream 忽略调用方传入的 proxy string，重新按 AccountID 解析 ProxyID，并禁用 redirect。
-- Claude Usage 即使无 TLS Profile 也必须走 CompanyHTTPUpstream。
+- Claude Usage以及v0.2.11新增的原生限额重置查询/兑换，即使无TLS Profile也必须先经ManagedProxyResolver解析受管代理；代理缺失、不健康或不匹配时失败关闭。
 - Claude/OpenAI/Grok/Gemini authorization 先按 ProxyID 解析并把 canonical ProxyURL 固定到现有 session；callback 必须携带 ProxyID，且重新解析出的唯一 endpoint 必须与 session.ProxyURL 完全一致。V1 不修改四套上游 session DTO。
 - account refresh 每次重新解析 ProxyID 和 health。
 - Grok OAuth 使用固定官方 token endpoint；Grok password auth 关闭。
